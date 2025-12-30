@@ -1,0 +1,130 @@
+{
+  "config_version": "0005",
+  "pantry": {
+    "width": 48.0,
+    "depth": 49.0,
+    "height": 105.0,
+    "door_clearance_east": 6.0,
+    "door_clearance_west": 4.0
+  },
+  "design_params": {
+    "sinusoid_period": 24.0,
+    "sinusoid_amplitude": 1.0,
+    "shelf_base_depth_east": 7.0,
+    "shelf_base_depth_south": 19.0,
+    "shelf_base_depth_west": 4.0,
+    "shelf_thickness": 1.0,
+    "interior_corner_radius": 6.0,
+    "door_corner_radius": 3.0
+  },
+  "shelves": [
+    {
+      "level": 0,
+      "height": 21.0,
+      "wall": "E",
+      "extent_start": 0.0,
+      "extent_end": 49.0,
+      "sinusoid_offset": 2.353304971691044,
+      "corner_points_solved": []
+    },
+    {
+      "level": 0,
+      "height": 21.0,
+      "wall": "S",
+      "extent_start": 0.0,
+      "extent_end": 48.0,
+      "sinusoid_offset": 5.9735141613602165,
+      "corner_points_solved": []
+    },
+    {
+      "level": 0,
+      "height": 21.0,
+      "wall": "W",
+      "extent_start": 0.0,
+      "extent_end": 49.0,
+      "sinusoid_offset": 4.599253580133889,
+      "corner_points_solved": []
+    },
+    {
+      "level": 1,
+      "height": 42.0,
+      "wall": "E",
+      "extent_start": 0.0,
+      "extent_end": 49.0,
+      "sinusoid_offset": 3.761482191925223,
+      "corner_points_solved": []
+    },
+    {
+      "level": 1,
+      "height": 42.0,
+      "wall": "S",
+      "extent_start": 0.0,
+      "extent_end": 48.0,
+      "sinusoid_offset": 0.980294029274052,
+      "corner_points_solved": []
+    },
+    {
+      "level": 1,
+      "height": 42.0,
+      "wall": "W",
+      "extent_start": 0.0,
+      "extent_end": 49.0,
+      "sinusoid_offset": 0.9801424781769557,
+      "corner_points_solved": []
+    },
+    {
+      "level": 2,
+      "height": 63.0,
+      "wall": "E",
+      "extent_start": 0.0,
+      "extent_end": 49.0,
+      "sinusoid_offset": 0.3649500985631483,
+      "corner_points_solved": []
+    },
+    {
+      "level": 2,
+      "height": 63.0,
+      "wall": "S",
+      "extent_start": 0.0,
+      "extent_end": 48.0,
+      "sinusoid_offset": 5.442345232562516,
+      "corner_points_solved": []
+    },
+    {
+      "level": 2,
+      "height": 63.0,
+      "wall": "W",
+      "extent_start": 0.0,
+      "extent_end": 49.0,
+      "sinusoid_offset": 3.776917009710014,
+      "corner_points_solved": []
+    },
+    {
+      "level": 3,
+      "height": 84.0,
+      "wall": "E",
+      "extent_start": 0.0,
+      "extent_end": 49.0,
+      "sinusoid_offset": 4.448951217224888,
+      "corner_points_solved": []
+    },
+    {
+      "level": 3,
+      "height": 84.0,
+      "wall": "S",
+      "extent_start": 0.0,
+      "extent_end": 48.0,
+      "sinusoid_offset": 0.12933619211510794,
+      "corner_points_solved": []
+    },
+    {
+      "level": 3,
+      "height": 84.0,
+      "wall": "W",
+      "extent_start": 0.0,
+      "extent_end": 49.0,
+      "sinusoid_offset": 6.094123332392967,
+      "corner_points_solved": []
+    }
+  ]
+}
