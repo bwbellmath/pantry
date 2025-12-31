@@ -775,7 +775,7 @@ def main():
     # Define specific heights for each shelf type (bottom-referenced)
     main_shelf_heights = [19, 39, 59, 79]  # Full L-shaped shelves with left-right-back
     left_intermediate_heights = [9, 29, 49, 69]  # Left side only, 7" depth
-    right_intermediate_heights = [5, 13, 26, 33, 43, 46, 66, 73, 86]  # Right side only, 4" depth
+    right_intermediate_heights = [5, 13, 26, 33, 46, 53, 66, 73, 86]  # Right side only, 4" depth
 
     # Get the levels from config (assuming they match the main shelf count)
     levels = sorted(set(s['level'] for s in config.shelves))

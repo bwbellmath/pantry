@@ -7,17 +7,17 @@ A Python-based tool for designing and rendering procedurally-generated pantry sh
 This project generates custom pantry shelving with organic, sinusoidal edges. Each shelf's depth varies according to a sine wave with a random phase offset, creating unique, flowing shapes. The system produces both technical 2D cutting templates (PDF) and photorealistic 3D renderings using Blender.
 
 ### Pantry Specifications
-- **Dimensions**: 48" wide × 54" deep × 96" tall (8 feet)
+- **Dimensions**: 48" wide × 49" deep × 105" tall (8' 9")
 - **Layout**: Door on North wall, shelves on East (left), South (back), and West (right) walls
-- **Door clearance**: 4.5" drywall on each side of door
+- **Door clearance**: 6" East side, 4" West side
 
 ### Shelf Design Parameters
-- **Base depth**: 6" from wall
+- **Base depth**: 7" from wall (East/left), 4" from wall (West/right)
 - **Sinusoid perturbation**: 2" amplitude, 24" (2 feet) period
-- **Depth formula**: `depth(position) = 6" + 2" × sin(2π × position / 24" + random_offset)`
+- **Depth formula**: `depth(position) = base_depth + 2" × sin(2π × position / 24" + random_offset)`
 - **Thickness**: 1" (extruded solid)
-- **Corner radius**: 2" chamfer
-- **Number of levels**: 4 shelves evenly spaced vertically
+- **Corner radius**: 3" chamfer (interior corners)
+- **Total shelves**: 25 pieces across 17 height levels
 
 ### Corner Treatment
 - **East/West × South corners**: Material ADDED to create smooth 2" radius transition
@@ -229,22 +229,46 @@ python scripts/modify_config.py configs/pantry_0000.json --set-depth 8.0 --outpu
 
 - **Origin**: Northwest corner (door side, left when looking in)
 - **X-axis**: West to East (left to right) [0 to 48"]
-- **Y-axis**: North to South (door to back wall) [0 to 54"]
-- **Z-axis**: Floor to ceiling (up) [0 to 96"]
+- **Y-axis**: North to South (door to back wall) [0 to 49"]
+- **Z-axis**: Floor to ceiling (up) [0 to 105"]
 
 ### Wall Positions
 - **North** (door wall): y = 0, x ∈ [0, 48]
-- **East** (left wall): x = 0, y ∈ [0, 54]
-- **South** (back wall): y = 54, x ∈ [0, 48]
-- **West** (right wall): x = 48, y ∈ [0, 54]
+- **East** (left wall): x = 0, y ∈ [0, 49]
+- **South** (back wall): y = 49, x ∈ [0, 48]
+- **West** (right wall): x = 48, y ∈ [0, 49]
 
 ## Shelf Level Heights
 
-For 4 shelves evenly spaced in 96" height:
-- **Level 0**: z = 24"
-- **Level 1**: z = 48"
-- **Level 2**: z = 72"
-- **Level 3**: z = 96" (note: this may be adjusted to leave headroom)
+All heights are bottom-referenced (measured to the bottom of each 1" thick shelf).
+
+### Main Shelves (Full L-shaped: Left + Back + Right walls)
+Complete shelves that span all three walls (East, South, West):
+- **19"** - shelf_L19, shelf_B19, shelf_R19
+- **39"** - shelf_L39, shelf_B39, shelf_R39
+- **59"** - shelf_L59, shelf_B59, shelf_R59
+- **79"** - shelf_L79, shelf_B79, shelf_R79
+
+### Left Intermediate Shelves (East wall only, 7" depth)
+Additional shelves on the left/East wall only:
+- **9"** - shelf_L9
+- **29"** - shelf_L29
+- **49"** - shelf_L49
+- **69"** - shelf_L69
+
+### Right Intermediate Shelves (West wall only, 4" depth)
+Additional shelves on the right/West wall only:
+- **5"** - shelf_R5
+- **13"** - shelf_R13
+- **26"** - shelf_R26
+- **33"** - shelf_R33
+- **46"** - shelf_R46
+- **53"** - shelf_R53
+- **66"** - shelf_R66
+- **73"** - shelf_R73
+- **86"** - shelf_R86
+
+**Total**: 25 shelf pieces across 17 unique height levels
 
 ## Implementation Phases
 
