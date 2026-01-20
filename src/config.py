@@ -42,10 +42,16 @@ class ShelfConfig:
                 "sinusoid_amplitude": 1.0,  # Halved from 2.0
                 "shelf_base_depth_east": 7.0,
                 "shelf_base_depth_south": 19.0,
-                "shelf_base_depth_west": 4.0,
+                "shelf_base_depth_west": 5.0,
                 "shelf_thickness": 1.0,
                 "interior_corner_radius": 3.0,  # South wall corners (add material)
-                "door_corner_radius": 3.0       # North wall corners (remove material)
+                "door_corner_radius": 3.0,       # North wall corners (remove material)
+                "door_extension": 0.75,          # Extend shelves doorward (inches)
+                "door_smoothing_tangent_x_east": 7.5625,   # Left shelf smoothing arc tangent point (7 + 9/16")
+                "door_smoothing_tangent_x_west": 3.75,     # Right shelf smoothing arc tangent point (3 + 3/4")
+                "door_notch_radius": 0.75,                  # Doorframe notch radius
+                "door_notch_intersection_x_east": 6.3125,  # Left shelf notch intersection (6 + 5/16")
+                "door_notch_intersection_x_west": 2.5625   # Right shelf notch intersection (2 + 9/16")
             },
             "shelves": []
         }

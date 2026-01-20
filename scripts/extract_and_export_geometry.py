@@ -14,6 +14,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.backends.backend_pdf import PdfPages
+import ezdxf
+from ezdxf import units
+from ezdxf.enums import TextEntityAlignment
 from geometry import (
     solve_tangent_circle_two_sinusoids,
     generate_circle_arc,
@@ -24,65 +27,563 @@ from geometry import (
 from config import ShelfConfig
 
 
+def find_brackets(f, x0, x1, samples=12000):
+    """Find all bracketing intervals where f changes sign."""
+    if x1 < x0:
+        x0, x1 = x1, x0
+    xs = [x0 + (x1 - x0) * i / samples for i in range(samples + 1)]
+    fs = [f(x) for x in xs]
+
+    brackets = []
+    for i in range(samples):
+        f0, f1 = fs[i], fs[i + 1]
+        if not (np.isfinite(f0) and np.isfinite(f1)):
+            continue
+        if f0 == 0.0:
+            eps = (x1 - x0) / samples
+            brackets.append((max(x0, xs[i] - eps), min(x1, xs[i] + eps)))
+        elif f0 * f1 < 0.0:
+            brackets.append((xs[i], xs[i + 1]))
+
+    # Merge overlapping brackets
+    brackets.sort()
+    merged = []
+    for lo, hi in brackets:
+        if not merged:
+            merged.append((lo, hi))
+        else:
+            plo, phi = merged[-1]
+            if lo <= phi:
+                merged[-1] = (plo, max(phi, hi))
+            else:
+                merged.append((lo, hi))
+    return merged
+
+
+def bisect_root(f, lo, hi, max_iter=90, tol=1e-13, debug=False):
+    """Find root of f in [lo, hi] using bisection."""
+    flo = f(lo)
+    fhi = f(hi)
+    if debug:
+        print(f"    BISECT: lo={lo:.6f}, flo={flo:.6f}, hi={hi:.6f}, fhi={fhi:.6f}")
+    if not (np.isfinite(flo) and np.isfinite(fhi)):
+        if debug:
+            print(f"    BISECT: Non-finite endpoint values")
+        return None
+    if flo == 0.0:
+        return lo
+    if fhi == 0.0:
+        return hi
+    if flo * fhi > 0.0:
+        if debug:
+            print(f"    BISECT: Same sign at endpoints (flo*fhi={flo*fhi:.6f})")
+        return None
+
+    a, b = lo, hi
+    fa, fb = flo, fhi
+    for i in range(max_iter):
+        m = 0.5 * (a + b)
+        fm = f(m)
+        if not np.isfinite(fm):
+            if debug:
+                print(f"    BISECT: Non-finite at iter {i}, m={m:.6f}")
+            return None
+        if abs(fm) < tol or (b - a) < tol:
+            if debug:
+                print(f"    BISECT: Converged at iter {i}, m={m:.6f}, fm={fm:.6e}")
+            return m
+        if fa * fm <= 0.0:
+            b, fb = m, fm
+        else:
+            a, fa = m, fm
+    if debug:
+        print(f"    BISECT: Max iterations reached")
+    return 0.5 * (a + b)
+
+
+def arc_is_inside_shelf(center_x, center_y, radius, theta_start, theta_sweep,
+                        sinusoid_func, y_min, y_max, samples=40, eps=1e-9):
+    """Check if arc stays inside shelf bounds."""
+    for i in range(1, samples):  # Skip endpoints
+        t = i / samples
+        theta = theta_start + theta_sweep * t
+        x = center_x + radius * np.cos(theta)
+        y = center_y + radius * np.sin(theta)
+
+        # Check y bounds
+        if y < y_min - eps or y > y_max + eps:
+            return False
+
+        # Check x bounds (must be between wall and sinusoid)
+        x_boundary = sinusoid_func(y)
+        if not np.isfinite(x_boundary):
+            return False
+
+        # For left shelf (wall at x=0): must have 0 <= x <= sinusoid
+        # For right shelf (wall at x=48): must have sinusoid <= x <= 48
+        if center_x < 24:  # left shelf
+            if x < -eps or x > x_boundary + eps:
+                return False
+        else:  # right shelf
+            if x < x_boundary - eps or x > 48 + eps:
+                return False
+
+    return True
+
+
 def solve_tangent_circle_horizontal_sinusoid(horizontal_y, depth, amplitude, period, offset, radius, side='E'):
     """
-    Solve for a circle tangent to a horizontal line and a sinusoid.
+    Solve for circle tangent to horizontal line and sinusoid using bracketing method.
+
+    Adapted from alt_4.py. Uses the constraint equation:
+        F(y) = (x(y) - x_c)² (1 + (dx/dy)²) - r² (dx/dy)²
+
+    where x_c is fixed based on the horizontal tangency requirement.
 
     Args:
-        horizontal_y: Y-coordinate of horizontal line
+        horizontal_y: Y-coordinate of horizontal line (back edge at y=29")
         depth: Base depth of sinusoid
         amplitude: Sinusoid amplitude
         period: Sinusoid period
         offset: Sinusoid phase offset
         radius: Desired circle radius
-        side: 'E' for left (sinusoid to right), 'W' for right (sinusoid to left)
+        side: 'E' for left shelf, 'W' for right shelf
 
     Returns:
         (center_x, center_y, tangent_y): Circle center and tangency point y-coordinate
     """
-    from scipy.optimize import minimize_scalar
 
-    # Circle center must be at y = horizontal_y - radius to be tangent to horizontal line
+    # Center y-coordinate is fixed (tangent to horizontal line)
     center_y = horizontal_y - radius
 
-    # Find tangency point on sinusoid
-    # For tangency, the distance from center to sinusoid must equal radius
-    # and the gradient must match
-    def objective(y):
+    def sinusoid_x(y):
+        """X-coordinate on sinusoid at given y."""
         if side == 'E':
-            x_sinusoid = depth + amplitude * np.sin(2 * np.pi * y / period + offset)
+            return depth + amplitude * np.sin(2 * np.pi * y / period + offset)
         else:  # 'W'
-            x_sinusoid = 48 - depth - amplitude * np.sin(2 * np.pi * y / period + offset)
+            return 48 - depth - amplitude * np.sin(2 * np.pi * y / period + offset)
 
-        # Distance from (center_x, center_y) to (x_sinusoid, y)
-        # We want to find center_x such that this distance equals radius
-        # For now, estimate center_x from the horizontal tangency
+    def sinusoid_dx_dy(y):
+        """Derivative dx/dy of sinusoid at given y."""
         if side == 'E':
-            center_x_estimate = x_sinusoid - radius
+            return amplitude * (2 * np.pi / period) * np.cos(2 * np.pi * y / period + offset)
+        else:  # 'W'
+            return -amplitude * (2 * np.pi / period) * np.cos(2 * np.pi * y / period + offset)
+
+    # Use the constraint from alt_4.py adapted to our coordinate system:
+    # For tangency: (y_t - y_c)² (1 + (dx/dy)²) = r² (dx/dy)²
+    def F(y):
+        m = sinusoid_dx_dy(y)
+
+        # (y - center_y)² (1 + m²) - r² m² = 0
+        dy = y - center_y
+        return (dy * dy) * (1.0 + m * m) - (radius * radius) * (m * m)
+
+    # Find all bracketing intervals
+    y_min = max(0, center_y - 2 * radius)
+    y_max = horizontal_y
+    brackets = find_brackets(F, y_min, y_max, samples=15000)
+
+    if not brackets:
+        raise RuntimeError(
+            f"No tangency solution found for {side} shelf. "
+            f"Try different radius or parameters."
+        )
+
+    # Collect all valid candidates
+    candidates = []
+    eps_slope = 1e-12
+
+    for lo, hi in brackets:
+        y_t = bisect_root(F, lo, hi)
+        if y_t is None:
+            continue
+
+        x_t = sinusoid_x(y_t)
+        m_t = sinusoid_dx_dy(y_t)
+
+        if abs(m_t) < eps_slope:
+            continue
+
+        # Calculate center_x from tangency condition
+        # Circle derivative at (x_t, y_t): dx/dy = -(y_t - y_c)/(x_t - x_c)
+        # Must equal sinusoid derivative: m_t
+        # So: -(y_t - center_y)/(x_t - x_c) = m_t
+        # Rearranging: x_t - x_c = -(y_t - center_y)/m_t
+        # Therefore: x_c = x_t + (y_t - center_y)/m_t
+        x_c = x_t + (y_t - center_y) / m_t
+
+        if not np.isfinite(x_c):
+            continue
+
+        # Validate: distance should equal radius
+        dist = np.hypot(x_t - x_c, y_t - center_y)
+        if abs(dist - radius) > 1e-6:
+            continue
+
+        # Validate: center must be inside shelf bounds
+        # For left shelf (side='E'): center should be between wall (x=0) and sinusoid
+        # For right shelf (side='W'): center should be between sinusoid and wall (x=48)
+        x_boundary_at_center = sinusoid_x(center_y)
+        if side == 'E':
+            # Left shelf: 0 < center_x < sinusoid
+            if x_c <= 0 or x_c >= x_boundary_at_center:
+                continue
         else:
-            center_x_estimate = x_sinusoid + radius
+            # Right shelf: sinusoid < center_x < 48
+            if x_c <= x_boundary_at_center or x_c >= 48:
+                continue
 
-        dist = np.sqrt((x_sinusoid - center_x_estimate)**2 + (y - center_y)**2)
-        return abs(dist - radius)
+        # De-duplicate
+        if all(abs(y_t - yt0) > 1e-7 for yt0, _ in candidates):
+            candidates.append((y_t, x_c))
 
-    # Search for tangency point between horizontal_y - 2*radius and horizontal_y
-    result = minimize_scalar(objective, bounds=(horizontal_y - 2*radius, horizontal_y), method='bounded')
-    tangent_y = result.x
+    if not candidates:
+        raise RuntimeError(
+            f"Found tangency roots but none are valid for {side} shelf. "
+            f"Try smaller radius."
+        )
 
-    # Calculate center_x from tangency point
-    if side == 'E':
-        x_sinusoid = depth + amplitude * np.sin(2 * np.pi * tangent_y / period + offset)
-        center_x = x_sinusoid - radius
-    else:
-        x_sinusoid = 48 - depth - amplitude * np.sin(2 * np.pi * tangent_y / period + offset)
-        center_x = x_sinusoid + radius
+    # Choose candidate closest to back edge (typical corner rounding)
+    y_t, center_x = max(candidates, key=lambda t: t[0])
 
-    return center_x, center_y, tangent_y
+    return center_x, center_y, y_t
 
 
-def generate_intermediate_shelf(depth, length, side, amplitude, period, offset, corner_radius=3.0):
+def solve_door_smoothing_radius(door_y, tangent_x, depth, amplitude, period, offset, side='E'):
     """
-    Generate a simple intermediate shelf polygon with corner radiusing at back interior corner.
+    Solve for door smoothing radius where horizontal tangent x-coordinate is fixed.
+
+    The circle must be tangent to:
+    1. Horizontal line at y = door_y, with tangent point at x = tangent_x
+    2. The sinusoid edge
+
+    We solve for the radius that achieves both tangencies.
+
+    Args:
+        door_y: Y-coordinate of extended door line (typically -0.75")
+        tangent_x: X-coordinate where circle touches door line
+        depth: Base depth of sinusoid
+        amplitude: Sinusoid amplitude
+        period: Sinusoid period
+        offset: Sinusoid phase offset
+        side: 'E' for left shelf, 'W' for right shelf
+
+    Returns:
+        (center_x, center_y, radius, tangent_y): Circle center, radius, and sinusoid tangency y
+    """
+
+    def sinusoid_x(y):
+        """X-coordinate on sinusoid at given y."""
+        if side == 'E':
+            return depth + amplitude * np.sin(2 * np.pi * y / period + offset)
+        else:  # 'W'
+            return 48 - depth - amplitude * np.sin(2 * np.pi * y / period + offset)
+
+    def sinusoid_dx_dy(y):
+        """Derivative dx/dy of sinusoid at given y."""
+        if side == 'E':
+            return amplitude * (2 * np.pi / period) * np.cos(2 * np.pi * y / period + offset)
+        else:  # 'W'
+            return -amplitude * (2 * np.pi / period) * np.cos(2 * np.pi * y / period + offset)
+
+    # For a given y_t on the sinusoid, we can calculate the required radius
+    # From the constraint: (h - r)^2 (1 + m^2) = r^2 m^2
+    # where h = y_t - door_y
+    # Solving for r: r = h[(1 + m^2) ± |m|sqrt(1 + m^2)]
+    #
+    # We also need: x_t = tangent_x - (h - r)/m
+    # And: x_t = sinusoid_x(y_t)
+    #
+    # So we find y_t where these constraints are satisfied
+
+    def F(y_t):
+        """
+        Function that equals zero when all constraints are satisfied.
+        """
+        try:
+            if y_t <= door_y:
+                return float('inf')
+
+            h = y_t - door_y  # height above door line
+            m_t = sinusoid_dx_dy(y_t)
+
+            if abs(m_t) < 1e-12:
+                return float('inf')
+
+            # Calculate required radius from tangency constraint
+            # (h - r)^2(1 + m^2) = r^2 m^2
+            # Expanding: r^2 - 2hr(1 + m^2) + h^2(1 + m^2) = 0
+            # Quadratic formula: r = h*sqrt(1+m^2) * [sqrt(1+m^2) ± |m|]
+            term = 1 + m_t * m_t
+            sqrt_term = np.sqrt(term)
+
+            r1 = h * sqrt_term * (sqrt_term + abs(m_t))
+            r2 = h * sqrt_term * (sqrt_term - abs(m_t))
+
+            # Choose smaller positive radius for smoother transition
+            if r1 > 0 and r2 > 0:
+                radius = min(r1, r2)
+            elif r1 > 0:
+                radius = r1
+            elif r2 > 0:
+                radius = r2
+            else:
+                return float('inf')
+
+            # Sanity check: radius should be reasonable (not too large)
+            if radius > 50:  # 50 inches is unreasonably large for a shelf corner
+                return float('inf')
+
+            # Now check if this radius gives correct x_t
+            # From tangency: x_t = tangent_x - (h - radius)/m_t
+            delta = h - radius
+            if abs(delta) > 100:  # Sanity check
+                return float('inf')
+
+            x_t_from_geometry = tangent_x - delta / m_t
+
+            # x_t should also be on the sinusoid
+            x_t_on_sinusoid = sinusoid_x(y_t)
+
+            # Sanity check
+            if not np.isfinite(x_t_from_geometry) or not np.isfinite(x_t_on_sinusoid):
+                return float('inf')
+
+            # Return the error
+            error = x_t_from_geometry - x_t_on_sinusoid
+            if not np.isfinite(error):
+                return float('inf')
+
+            return error
+        except:
+            return float('inf')
+
+    # Search for y_t in the range [door_y, some reasonable upper bound]
+    y_min = door_y + 0.01  # Just above door line
+    y_max = min(29.0, door_y + 10.0)  # Don't go too far into the shelf
+
+    brackets = find_brackets(F, y_min, y_max, samples=5000)
+
+    if not brackets:
+        print(f"  DEBUG: No brackets found for door smoothing. Tangent_x={tangent_x}, door_y={door_y}, side={side}")
+        print(f"  DEBUG: Falling back to no door smoothing for this shelf")
+        # Return None to indicate no smoothing solution
+        return None, None, None, None
+
+    # Find the solution closest to the door (smallest y_t)
+    best_y_t = None
+    best_radius = None
+
+    print(f"  DEBUG: Found {len(brackets)} brackets for door smoothing")
+    for i, (lo, hi) in enumerate(brackets):
+        # Filter out brackets with large endpoint values (likely discontinuities)
+        flo = F(lo)
+        fhi = F(hi)
+        if abs(flo) > 10 or abs(fhi) > 10:
+            print(f"  DEBUG: Bracket {i}: skipping large endpoints flo={flo:.2f}, fhi={fhi:.2f}")
+            continue
+
+        y_t = bisect_root(F, lo, hi, debug=(i == 0 and len(brackets) <= 2))  # Debug first bracket if there aren't many
+        if y_t is None:
+            print(f"  DEBUG: Bracket {i}: bisect failed for [{lo:.6f}, {hi:.6f}]")
+            # Try again with debug to see what's happening
+            if i == 0:  # Only debug first failed bracket
+                print(f"  DEBUG: Retrying with debug...")
+                _ = bisect_root(F, lo, hi, debug=True)
+            continue
+
+        h = y_t - door_y
+        m_t = sinusoid_dx_dy(y_t)
+        term = 1 + m_t * m_t
+        sqrt_term = np.sqrt(term)
+
+        r1 = h * (sqrt_term * sqrt_term + abs(m_t) * sqrt_term)
+        r2 = h * (sqrt_term * sqrt_term - abs(m_t) * sqrt_term)
+
+        print(f"  DEBUG: Bracket {i}: y_t={y_t:.4f}, h={h:.4f}, m_t={m_t:.4f}, r1={r1:.4f}, r2={r2:.4f}")
+
+        if r1 > 0 and r2 > 0:
+            radius = min(r1, r2)
+        elif r1 > 0:
+            radius = r1
+        elif r2 > 0:
+            radius = r2
+        else:
+            print(f"  DEBUG: Bracket {i}: No positive radius")
+            continue
+
+        print(f"  DEBUG: Bracket {i}: radius={radius:.4f}")
+        if best_y_t is None or y_t < best_y_t:
+            best_y_t = y_t
+            best_radius = radius
+
+    if best_y_t is None:
+        print(f"  DEBUG: No valid solution found. Tangent_x={tangent_x}, door_y={door_y}, side={side}")
+        print(f"  DEBUG: Falling back to no door smoothing for this shelf")
+        # Return None to indicate no smoothing solution
+        return None, None, None, None
+
+    # Calculate final geometry
+    center_x = tangent_x
+    center_y = door_y + best_radius
+
+    return center_x, center_y, best_radius, best_y_t
+
+
+def solve_door_smoothing_fixed_radius(door_y, anchor_x, depth, amplitude, period, offset, radius, side='E'):
+    """
+    Solve for door smoothing arc using min_q bracketing approach.
+
+    Rotates circle center around anchor point and brackets on theta to find tangency.
+    Uses q(x;theta) = (x-cx)^2 + (y_sine(x)-cy)^2 - r^2 minimization.
+
+    Args:
+        door_y: Y-coordinate of anchor point (door line, typically -0.75")
+        anchor_x: X-coordinate of anchor point
+        depth: Base depth of sinusoid
+        amplitude: Sinusoid amplitude
+        period: Sinusoid period
+        offset: Sinusoid phase offset
+        radius: Fixed circle radius (default 5")
+        side: 'E' for left shelf, 'W' for right shelf
+
+    Returns:
+        (center_x, center_y, radius, tangent_x, tangent_y) or (None, None, None, None, None)
+    """
+
+    # Convert from x(y) to y(x) parameterization
+    # Our sinusoid is x(y), need to sample along x-axis instead
+    def sinusoid_x(y):
+        """X-coordinate on sinusoid at given y (original parameterization)."""
+        if side == 'E':
+            return depth + amplitude * np.sin(2 * np.pi * y / period + offset)
+        else:  # 'W'
+            return 48 - depth - amplitude * np.sin(2 * np.pi * y / period + offset)
+
+    def center_from_theta(theta):
+        """Center position from rotation angle."""
+        if side == 'E':
+            # Left shelf: rotate from anchor rightward/upward
+            return (anchor_x + radius * np.cos(theta), door_y + radius * np.sin(theta))
+        else:
+            # Right shelf: rotate from anchor leftward/upward (theta=0 points inward)
+            return (anchor_x - radius * np.cos(theta), door_y + radius * np.sin(theta))
+
+    def q_of_y(y, cx, cy):
+        """q = (x_sine(y) - cx)^2 + (y - cy)^2 - r^2"""
+        x = sinusoid_x(y)
+        if not np.isfinite(x):
+            return float('inf')
+        dx = x - cx
+        dy = y - cy
+        return dx * dx + dy * dy - radius * radius
+
+    def min_q_over_y(cx, cy, samples=1200):
+        """Find minimum of q over y in [door_y, 29]."""
+        y_min = max(door_y, cy - radius)
+        y_max = min(29.0, cy + radius)
+        if y_max <= y_min:
+            return door_y, float('inf')
+
+        # Coarse sample
+        best_q = float('inf')
+        best_y = y_min
+        for i in range(samples + 1):
+            y = y_min + (y_max - y_min) * i / samples
+            q = q_of_y(y, cx, cy)
+            if np.isfinite(q) and q < best_q:
+                best_q = q
+                best_y = y
+
+        # Refine with golden section
+        gr = (np.sqrt(5.0) - 1.0) / 2.0
+        width = (y_max - y_min) / samples
+        lo = max(y_min, best_y - 5 * width)
+        hi = min(y_max, best_y + 5 * width)
+
+        for _ in range(60):
+            c = hi - gr * (hi - lo)
+            d = lo + gr * (hi - lo)
+            fc = q_of_y(c, cx, cy)
+            fd = q_of_y(d, cx, cy)
+            if not np.isfinite(fc):
+                fc = float('inf')
+            if not np.isfinite(fd):
+                fd = float('inf')
+            if fc < fd:
+                hi, d, fd = d, c, fc
+                c = hi - gr * (hi - lo)
+                fc = q_of_y(c, cx, cy)
+            else:
+                lo, c, fc = c, d, fd
+                d = lo + gr * (hi - lo)
+                fd = q_of_y(d, cx, cy)
+
+        y = 0.5 * (lo + hi)
+        return y, q_of_y(y, cx, cy)
+
+    def g(theta):
+        """min_q as function of theta."""
+        cx, cy = center_from_theta(theta)
+        _, mq = min_q_over_y(cx, cy)
+        return mq
+
+    # Find bracket on theta where g changes sign
+    theta_lo = -np.pi / 2
+    theta_hi = np.pi / 2
+    theta_samples = 200
+
+    thetas = np.linspace(theta_lo, theta_hi, theta_samples + 1)
+    vals = [g(t) for t in thetas]
+
+    # Check for already near zero
+    best_i = min(range(len(vals)), key=lambda i: abs(vals[i]) if np.isfinite(vals[i]) else float('inf'))
+    if abs(vals[best_i]) < 1e-7:
+        i = best_i
+        lo = thetas[max(0, i - 1)]
+        hi = thetas[min(theta_samples, i + 1)]
+    else:
+        # Find sign change
+        found = False
+        for i in range(theta_samples):
+            v0, v1 = vals[i], vals[i + 1]
+            if np.isfinite(v0) and np.isfinite(v1) and v0 * v1 < 0:
+                lo, hi = thetas[i], thetas[i + 1]
+                found = True
+                break
+        if not found:
+            return None, None, None, None, None
+
+    # Bisect to find theta* where g(theta*) = 0
+    for _ in range(70):
+        mid = 0.5 * (lo + hi)
+        gmid = g(mid)
+        if abs(gmid) < 1e-9 or (hi - lo) < 1e-9:
+            break
+        glo = g(lo)
+        if glo * gmid <= 0:
+            hi = mid
+        else:
+            lo = mid
+
+    theta_star = 0.5 * (lo + hi)
+    cx, cy = center_from_theta(theta_star)
+    y_touch, mq = min_q_over_y(cx, cy, samples=2000)
+
+    if abs(mq) > 1e-6:
+        return None, None, None, None, None
+
+    x_touch = sinusoid_x(y_touch)
+    return cx, cy, radius, x_touch, y_touch
+
+
+def generate_intermediate_shelf(depth, length, side, amplitude, period, offset, corner_radius=3.0,
+                               door_extension=0.0, door_smoothing_tangent_x=None, door_notch_radius=0.0,
+                               door_notch_intersection_x=None):
+    """
+    Generate a simple intermediate shelf polygon with corner radiusing at back interior corner
+    and optional door-fitting features.
 
     Args:
         depth: Base depth in inches (7" for left, 4" for right)
@@ -92,12 +593,18 @@ def generate_intermediate_shelf(depth, length, side, amplitude, period, offset, 
         period: Sinusoid period
         offset: Random phase offset for this shelf
         corner_radius: Radius for back interior corner (default 3")
+        door_extension: Distance to extend doorward (inches, default 0)
+        door_smoothing_tangent_x: X-coordinate where smoothing arc touches door line (None = no smoothing)
+        door_notch_radius: Radius for doorframe notch (default 0 = no notch)
+        door_notch_intersection_x: X-coordinate where notch intersects y=0 line (None = no notch)
 
     Returns:
-        Polygon array with sinusoidal interior edge and rounded back interior corner
+        Polygon array with sinusoidal interior edge, rounded corners, and door features
     """
     # Generate sinusoid points along the interior edge
-    y_points = np.linspace(0, length, 100)
+    # If door features are enabled, extend sinusoid down to door line
+    y_start = -door_extension if door_extension > 0 else 0
+    y_points = np.linspace(y_start, length, 100)
 
     # Generate corner arc (quarter circle)
     arc_angles = np.linspace(0, np.pi/2, 20)
@@ -108,7 +615,7 @@ def generate_intermediate_shelf(depth, length, side, amplitude, period, offset, 
         # Left shelf: wall at x=0, sinusoid on right side
         # Back interior corner is SE (where south edge meets sinusoid)
 
-        # Solve for tangent circle
+        # Solve for back corner tangent circle
         center_x, center_y, tangent_y = solve_tangent_circle_horizontal_sinusoid(
             length, depth, amplitude, period, offset, corner_radius, side='E')
 
@@ -123,37 +630,199 @@ def generate_intermediate_shelf(depth, length, side, amplitude, period, offset, 
         angle_horizontal = np.pi/2  # Directly above center
         angle_sinusoid = np.arctan2(tangent_y - center_y, x_sinusoid_tangent - center_x)
 
-        # 1. Start at NW corner (wall meets door)
-        polygon.append([0, 0])
+        # Door features (if enabled)
+        has_door_features = door_extension > 0 and door_smoothing_tangent_x is not None
 
-        # 2. Wall edge from [0, 0] to [0, length]
-        polygon.append([0, length])
+        if has_door_features:
+            # === LEFT SHELF WITH DOOR FEATURES ===
+            door_y = -door_extension  # Extended door line
 
-        # 3. South edge from wall to horizontal tangency point
-        polygon.append([x_horizontal_tangent, y_horizontal_tangent])
+            # 1. Start at original door/wall corner
+            polygon.append([0, 0])
 
-        # 4. SE corner arc - from horizontal tangency to sinusoid tangency
-        arc_angles_actual = np.linspace(angle_horizontal, angle_sinusoid, 20)
-        for angle in arc_angles_actual:
-            x = center_x + corner_radius * np.cos(angle)
-            y = center_y + corner_radius * np.sin(angle)
-            polygon.append([x, y])
+            # 2. Line from wall to notch intersection along y=0 (if notch exists)
+            if door_notch_radius > 0 and door_notch_intersection_x is not None:
+                # Go from wall to notch point b along y=0
+                polygon.append([door_notch_intersection_x, 0])
 
-        # 5. Sinusoid edge going north (from tangent point to y=0)
-        for y in y_points[::-1]:
-            if y <= tangent_y:
-                x = depth + amplitude * np.sin(2 * np.pi * y / period + offset)
+                # 3. Notch arc (concave quarter-circle) - mirror of right shelf
+                # Center at (door_notch_intersection_x, door_y), radius = door_notch_radius
+                # Arc from 90° (pointing up/north) to 0° (pointing right/east)
+                # Point b: center + (0, r) at 90° = (door_notch_intersection_x, 0)
+                # Point a: center + (r, 0) at 0° = (door_notch_intersection_x + r, door_y)
+                notch_angles = np.linspace(np.pi / 2, 0, 15)
+                notch_center_x = door_notch_intersection_x
+                notch_center_y = door_y
+                for angle in notch_angles:
+                    x = notch_center_x + door_notch_radius * np.cos(angle)
+                    y = notch_center_y + door_notch_radius * np.sin(angle)
+                    polygon.append([x, y])
+
+                # 4. Now at point a, continue along door line to smoothing tangent
+                polygon.append([door_smoothing_tangent_x, door_y])
+            else:
+                # No notch, just door-line to smoothing tangent
+                polygon.append([door_smoothing_tangent_x, door_y])
+
+            # 7. Door smoothing arc (convex) - NEW FIXED-RADIUS APPROACH
+            # Anchor point is 5/8" to the right of notch end point
+            anchor_x_left = door_notch_intersection_x + door_notch_radius + 0.625
+            min_radius = 5.0  # Default minimum radius
+            smooth_center_x, smooth_center_y, smooth_radius, smooth_tangent_x, smooth_tangent_y = \
+                solve_door_smoothing_fixed_radius(door_y, anchor_x_left, depth, amplitude, period, offset, min_radius, side='E')
+
+            if smooth_center_x is not None:
+                # Smoothing solution found
+                # Tangency point already provided by solver
+                x_smooth_sinusoid = smooth_tangent_x
+
+                # Arc from anchor point c to sinusoid tangency
+                # Left shelf: COUNTERCLOCKWISE, taking the short arc
+                angle_anchor = np.arctan2(door_y - smooth_center_y, anchor_x_left - smooth_center_x)
+                angle_smooth_sinusoid = np.arctan2(smooth_tangent_y - smooth_center_y,
+                                                  x_smooth_sinusoid - smooth_center_x)
+
+                # Always take the short arc (< 180°)
+                angle_diff = angle_smooth_sinusoid - angle_anchor
+                while angle_diff > np.pi:
+                    angle_diff -= 2 * np.pi
+                while angle_diff < -np.pi:
+                    angle_diff += 2 * np.pi
+
+                smooth_arc_angles = np.linspace(angle_anchor, angle_anchor + angle_diff, 20)
+                for angle in smooth_arc_angles:
+                    x = smooth_center_x + smooth_radius * np.cos(angle)
+                    y = smooth_center_y + smooth_radius * np.sin(angle)
+                    polygon.append([x, y])
+
+                # 8. Sinusoid edge from smoothing tangent to back corner tangent
+                for y in y_points:
+                    if smooth_tangent_y <= y <= tangent_y:
+                        x = depth + amplitude * np.sin(2 * np.pi * y / period + offset)
+                        polygon.append([x, y])
+            else:
+                # No smoothing solution - go directly from door line to sinusoid
+                print("  Warning: No door smoothing solution, using simple geometry")
+                # 8. Sinusoid edge from door line to back corner tangent
+                for y in y_points:
+                    if door_y <= y <= tangent_y:
+                        x = depth + amplitude * np.sin(2 * np.pi * y / period + offset)
+                        polygon.append([x, y])
+
+            # 9. Back corner arc (from sinusoid to south edge)
+            # Define sinusoid function for arc containment test
+            def sinusoid_func(y):
+                return depth + amplitude * np.sin(2 * np.pi * y / period + offset)
+
+            # Calculate arc sweep (from sinusoid tangency TO horizontal tangency)
+            angle_diff = angle_horizontal - angle_sinusoid
+            while angle_diff > np.pi:
+                angle_diff -= 2 * np.pi
+            while angle_diff < -np.pi:
+                angle_diff += 2 * np.pi
+
+            arc_short = angle_diff
+            arc_long = arc_short - 2 * np.pi if arc_short > 0 else arc_short + 2 * np.pi
+
+            # Test which arc stays inside shelf
+            short_ok = arc_is_inside_shelf(
+                center_x, center_y, corner_radius,
+                angle_sinusoid, arc_short,
+                sinusoid_func, 0, length
+            )
+            long_ok = arc_is_inside_shelf(
+                center_x, center_y, corner_radius,
+                angle_sinusoid, arc_long,
+                sinusoid_func, 0, length
+            )
+
+            if short_ok and not long_ok:
+                arc_angles_actual = np.linspace(angle_sinusoid, angle_sinusoid + arc_short, 20)
+            elif long_ok and not short_ok:
+                arc_angles_actual = np.linspace(angle_sinusoid, angle_sinusoid + arc_long, 20)
+            elif short_ok and long_ok:
+                arc_angles_actual = np.linspace(angle_sinusoid, angle_sinusoid + arc_short, 20)
+            else:
+                raise RuntimeError("Neither arc stays inside shelf - radius may be too large")
+
+            for angle in arc_angles_actual:
+                x = center_x + corner_radius * np.cos(angle)
+                y = center_y + corner_radius * np.sin(angle)
                 polygon.append([x, y])
 
-        # 6. North/door edge from sinusoid back to wall
-        x_north = depth + amplitude * np.sin(2 * np.pi * 0 / period + offset)
-        polygon.append([x_north, 0])
+            # 10. South edge from back corner to wall
+            polygon.append([0, length])
+
+            # 11. Wall from south back to start (will close automatically)
+
+        else:
+            # === LEFT SHELF WITHOUT DOOR FEATURES (original) ===
+            # 1. Start at NW corner (wall meets door)
+            polygon.append([0, 0])
+
+            # 2. Wall edge from [0, 0] to [0, length]
+            polygon.append([0, length])
+
+            # 3. South edge from wall to horizontal tangency point
+            polygon.append([x_horizontal_tangent, y_horizontal_tangent])
+
+            # 4. SE corner arc - from horizontal tangency to sinusoid tangency
+            # Define sinusoid function for left shelf
+            def sinusoid_func(y):
+                return depth + amplitude * np.sin(2 * np.pi * y / period + offset)
+
+            # Calculate both possible arc sweeps
+            angle_diff = angle_sinusoid - angle_horizontal
+            while angle_diff > np.pi:
+                angle_diff -= 2 * np.pi
+            while angle_diff < -np.pi:
+                angle_diff += 2 * np.pi
+
+            arc_short = angle_diff
+            arc_long = arc_short - 2 * np.pi if arc_short > 0 else arc_short + 2 * np.pi
+
+            # Test which arc stays inside shelf
+            short_ok = arc_is_inside_shelf(
+                center_x, center_y, corner_radius,
+                angle_horizontal, arc_short,
+                sinusoid_func, 0, length
+            )
+            long_ok = arc_is_inside_shelf(
+                center_x, center_y, corner_radius,
+                angle_horizontal, arc_long,
+                sinusoid_func, 0, length
+            )
+
+            if short_ok and not long_ok:
+                arc_angles_actual = np.linspace(angle_horizontal, angle_horizontal + arc_short, 20)
+            elif long_ok and not short_ok:
+                arc_angles_actual = np.linspace(angle_horizontal, angle_horizontal + arc_long, 20)
+            elif short_ok and long_ok:
+                # Prefer shorter arc
+                arc_angles_actual = np.linspace(angle_horizontal, angle_horizontal + arc_short, 20)
+            else:
+                raise RuntimeError("Neither arc stays inside shelf - radius may be too large")
+
+            for angle in arc_angles_actual:
+                x = center_x + corner_radius * np.cos(angle)
+                y = center_y + corner_radius * np.sin(angle)
+                polygon.append([x, y])
+
+            # 5. Sinusoid edge going north (from tangent point to y=0)
+            for y in y_points[::-1]:
+                if y <= tangent_y:
+                    x = depth + amplitude * np.sin(2 * np.pi * y / period + offset)
+                    polygon.append([x, y])
+
+            # 6. North/door edge from sinusoid back to wall
+            x_north = depth + amplitude * np.sin(2 * np.pi * 0 / period + offset)
+            polygon.append([x_north, 0])
 
     else:  # side == 'W'
         # Right shelf: wall at x=48, sinusoid on left side
         # Back interior corner is SW (where south edge meets sinusoid)
 
-        # Solve for tangent circle
+        # Solve for back corner tangent circle
         center_x, center_y, tangent_y = solve_tangent_circle_horizontal_sinusoid(
             length, depth, amplitude, period, offset, corner_radius, side='W')
 
@@ -168,31 +837,193 @@ def generate_intermediate_shelf(depth, length, side, amplitude, period, offset, 
         angle_horizontal = np.pi/2  # Directly above center
         angle_sinusoid = np.arctan2(tangent_y - center_y, x_sinusoid_tangent - center_x)
 
-        # 1. Start at NE corner (wall meets door)
-        polygon.append([48, 0])
+        # Door features (if enabled)
+        has_door_features = door_extension > 0 and door_smoothing_tangent_x is not None
 
-        # 2. North/door edge from wall to sinusoid
-        x_north = 48 - depth - amplitude * np.sin(2 * np.pi * 0 / period + offset)
-        polygon.append([x_north, 0])
+        if has_door_features:
+            # === RIGHT SHELF WITH DOOR FEATURES ===
+            door_y = -door_extension  # Extended door line
 
-        # 3. Sinusoid edge going south (from y=0 to tangent point)
-        for y in y_points:
-            if y <= tangent_y:
-                x = 48 - depth - amplitude * np.sin(2 * np.pi * y / period + offset)
+            # 1. Start at original door/wall corner
+            polygon.append([48, 0])
+
+            # 2. Line from wall to notch intersection along y=0 (if notch exists)
+            if door_notch_radius > 0 and door_notch_intersection_x is not None:
+                # Go from wall to notch point b along y=0
+                polygon.append([door_notch_intersection_x, 0])
+
+                # 4. Notch arc (concave quarter-circle)
+                # Center at (door_notch_intersection_x, door_y), radius = door_notch_radius
+                # Arc from 90° (pointing up/north) to 180° (pointing left/west)
+                # Point a: center + (-r, 0) at 180°
+                # Point b: center + (0, r) at 90°
+                notch_angles = np.linspace(np.pi / 2, np.pi, 15)
+                notch_center_x = door_notch_intersection_x
+                notch_center_y = door_y
+                for angle in notch_angles:
+                    x = notch_center_x + door_notch_radius * np.cos(angle)
+                    y = notch_center_y + door_notch_radius * np.sin(angle)
+                    polygon.append([x, y])
+
+                # 5. Now at point a, continue along door line to smoothing tangent
+                polygon.append([door_smoothing_tangent_x, door_y])
+            else:
+                # No notch, just door-line to smoothing tangent
+                polygon.append([door_smoothing_tangent_x, door_y])
+
+            # 7. Door smoothing arc (convex) - NEW FIXED-RADIUS APPROACH
+            # Anchor point is 5/8" to the left of notch end point
+            anchor_x_right = door_notch_intersection_x - door_notch_radius - 0.625
+            min_radius = 5.0  # Default minimum radius
+            smooth_center_x, smooth_center_y, smooth_radius, smooth_tangent_x, smooth_tangent_y = \
+                solve_door_smoothing_fixed_radius(door_y, anchor_x_right, depth, amplitude, period, offset, min_radius, side='W')
+
+            if smooth_center_x is not None:
+                # Smoothing solution found
+                # Tangency point already provided by solver
+                x_smooth_sinusoid = smooth_tangent_x
+
+                # Arc from anchor point c to sinusoid tangency
+                # Right shelf: CLOCKWISE, taking the short arc
+                angle_anchor = np.arctan2(door_y - smooth_center_y, anchor_x_right - smooth_center_x)
+                angle_smooth_sinusoid = np.arctan2(smooth_tangent_y - smooth_center_y,
+                                                  x_smooth_sinusoid - smooth_center_x)
+
+                # Always take the short arc (< 180°)
+                angle_diff = angle_smooth_sinusoid - angle_anchor
+                while angle_diff > np.pi:
+                    angle_diff -= 2 * np.pi
+                while angle_diff < -np.pi:
+                    angle_diff += 2 * np.pi
+
+                smooth_arc_angles = np.linspace(angle_anchor, angle_anchor + angle_diff, 20)
+                for angle in smooth_arc_angles:
+                    x = smooth_center_x + smooth_radius * np.cos(angle)
+                    y = smooth_center_y + smooth_radius * np.sin(angle)
+                    polygon.append([x, y])
+
+                # 8. Sinusoid edge from smoothing tangent to back corner tangent
+                for y in y_points:
+                    if smooth_tangent_y <= y <= tangent_y:
+                        x = 48 - depth - amplitude * np.sin(2 * np.pi * y / period + offset)
+                        polygon.append([x, y])
+            else:
+                # No smoothing solution - go directly from door line to sinusoid
+                print("  Warning: No door smoothing solution, using simple geometry")
+                # 8. Sinusoid edge from door line to back corner tangent
+                for y in y_points:
+                    if door_y <= y <= tangent_y:
+                        x = 48 - depth - amplitude * np.sin(2 * np.pi * y / period + offset)
+                        polygon.append([x, y])
+
+            # 9. Back corner arc (from sinusoid to south edge)
+            # Define sinusoid function for arc containment test
+            def sinusoid_func(y):
+                return 48 - depth - amplitude * np.sin(2 * np.pi * y / period + offset)
+
+            # Calculate arc sweep
+            angle_diff = angle_horizontal - angle_sinusoid
+            while angle_diff > np.pi:
+                angle_diff -= 2 * np.pi
+            while angle_diff < -np.pi:
+                angle_diff += 2 * np.pi
+
+            arc_short = angle_diff
+            arc_long = arc_short - 2 * np.pi if arc_short > 0 else arc_short + 2 * np.pi
+
+            # Test which arc stays inside shelf
+            short_ok = arc_is_inside_shelf(
+                center_x, center_y, corner_radius,
+                angle_sinusoid, arc_short,
+                sinusoid_func, 0, length
+            )
+            long_ok = arc_is_inside_shelf(
+                center_x, center_y, corner_radius,
+                angle_sinusoid, arc_long,
+                sinusoid_func, 0, length
+            )
+
+            if short_ok and not long_ok:
+                arc_angles_actual = np.linspace(angle_sinusoid, angle_sinusoid + arc_short, 20)
+            elif long_ok and not short_ok:
+                arc_angles_actual = np.linspace(angle_sinusoid, angle_sinusoid + arc_long, 20)
+            elif short_ok and long_ok:
+                arc_angles_actual = np.linspace(angle_sinusoid, angle_sinusoid + arc_short, 20)
+            else:
+                raise RuntimeError("Neither arc stays inside shelf - radius may be too large")
+
+            for angle in arc_angles_actual:
+                x = center_x + corner_radius * np.cos(angle)
+                y = center_y + corner_radius * np.sin(angle)
                 polygon.append([x, y])
 
-        # 4. SW corner arc - from sinusoid tangency to horizontal tangency
-        arc_angles_actual = np.linspace(angle_sinusoid, angle_horizontal, 20)
-        for angle in arc_angles_actual:
-            x = center_x + corner_radius * np.cos(angle)
-            y = center_y + corner_radius * np.sin(angle)
-            polygon.append([x, y])
+            # 10. South edge from back corner to wall
+            polygon.append([48, length])
 
-        # 5. South edge from horizontal tangency to wall
-        polygon.append([48, length])
+            # 11. Wall from south back to start (will close automatically)
 
-        # 6. Wall edge from [48, length] back to [48, 0]
-        # (will close automatically)
+        else:
+            # === RIGHT SHELF WITHOUT DOOR FEATURES (original) ===
+            # 1. Start at NE corner (wall meets door)
+            polygon.append([48, 0])
+
+            # 2. North/door edge from wall to sinusoid
+            x_north = 48 - depth - amplitude * np.sin(2 * np.pi * 0 / period + offset)
+            polygon.append([x_north, 0])
+
+            # 3. Sinusoid edge going south (from y=0 to tangent point)
+            for y in y_points:
+                if y <= tangent_y:
+                    x = 48 - depth - amplitude * np.sin(2 * np.pi * y / period + offset)
+                    polygon.append([x, y])
+
+            # 4. SW corner arc - from sinusoid tangency to horizontal tangency
+            # Define sinusoid function for right shelf
+            def sinusoid_func(y):
+                return 48 - depth - amplitude * np.sin(2 * np.pi * y / period + offset)
+
+            # Calculate both possible arc sweeps
+            angle_diff = angle_horizontal - angle_sinusoid
+            while angle_diff > np.pi:
+                angle_diff -= 2 * np.pi
+            while angle_diff < -np.pi:
+                angle_diff += 2 * np.pi
+
+            arc_short = angle_diff
+            arc_long = arc_short - 2 * np.pi if arc_short > 0 else arc_short + 2 * np.pi
+
+            # Test which arc stays inside shelf
+            short_ok = arc_is_inside_shelf(
+                center_x, center_y, corner_radius,
+                angle_sinusoid, arc_short,
+                sinusoid_func, 0, length
+            )
+            long_ok = arc_is_inside_shelf(
+                center_x, center_y, corner_radius,
+                angle_sinusoid, arc_long,
+                sinusoid_func, 0, length
+            )
+
+            if short_ok and not long_ok:
+                arc_angles_actual = np.linspace(angle_sinusoid, angle_sinusoid + arc_short, 20)
+            elif long_ok and not short_ok:
+                arc_angles_actual = np.linspace(angle_sinusoid, angle_sinusoid + arc_long, 20)
+            elif short_ok and long_ok:
+                # Prefer shorter arc
+                arc_angles_actual = np.linspace(angle_sinusoid, angle_sinusoid + arc_short, 20)
+            else:
+                raise RuntimeError("Neither arc stays inside shelf - radius may be too large")
+
+            for angle in arc_angles_actual:
+                x = center_x + corner_radius * np.cos(angle)
+                y = center_y + corner_radius * np.sin(angle)
+                polygon.append([x, y])
+
+            # 5. South edge from horizontal tangency to wall
+            polygon.append([48, length])
+
+            # 6. Wall edge from [48, length] back to [48, 0]
+            # (will close automatically)
 
     return np.array(polygon)
 
@@ -426,9 +1257,16 @@ def extract_exact_shelf_geometries(config, level):
     # 4. Right wall at cut
     back_polygon.append([pantry_width, rb_cut_y])
 
-    # 5. Right arc points (reversed) from cut going up to rb_point2
-    # Use original arc orientation (before the fix for side shelves)
-    rb_arc_for_back = rb_arc_original[::-1]  # Reverse original arc
+    # 5. Right arc points from cut going up to rb_point2
+    # Check which direction the arc goes - sometimes it's point1→point2, sometimes point2→point1
+    # For back shelf, we need the arc to go from rb_point1 (at cut) to rb_point2 (at sinusoid)
+    if np.linalg.norm(rb_arc_original[0] - rb_point1) < 0.1:
+        # Arc already goes from point1 to point2, use as-is
+        rb_arc_for_back = rb_arc_original
+    else:
+        # Arc goes from point2 to point1, reverse it
+        rb_arc_for_back = rb_arc_original[::-1]
+
     for point in rb_arc_for_back:
         if point[1] >= rb_cut_y - 0.1:  # Above cut line
             back_polygon.append(point)
@@ -524,6 +1362,119 @@ def export_polygon_to_svg(polygon, filepath, shelf_height, wall_name, width_in, 
     # Write file
     with open(filepath, 'w') as f:
         f.write('\n'.join(svg_lines))
+
+
+def export_polygon_to_dxf(polygon, filepath, shelf_height, wall_name, width_in, height_in):
+    """Export a polygon to DXF format for Fusion 360.
+
+    Args:
+        polygon: Polygon vertices
+        filepath: Output file path
+        shelf_height: Bottom-referenced height in inches
+        wall_name: 'L', 'R', or 'B' for left/right/back
+        width_in: Polygon width
+        height_in: Polygon height
+    """
+    filepath = Path(filepath)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+
+    # Create a new DXF document
+    doc = ezdxf.new('R2010', setup=True)
+    doc.units = units.IN  # Set units to inches
+
+    msp = doc.modelspace()
+
+    # Create polyline from polygon vertices
+    # Convert polygon points to 3D points (z=0)
+    points_3d = [(float(x), float(y), 0.0) for x, y in polygon]
+
+    # Add closed polyline
+    polyline = msp.add_lwpolyline(points_3d, close=True)
+    polyline.dxf.layer = "OUTLINE"
+
+    # Calculate centroid for label placement
+    centroid_x = float(np.mean(polygon[:, 0]))
+    centroid_y = float(np.mean(polygon[:, 1]))
+
+    # Get bounds
+    min_x, max_x = np.min(polygon[:, 0]), np.max(polygon[:, 0])
+    min_y, max_y = np.min(polygon[:, 1]), np.max(polygon[:, 1])
+    width = max_x - min_x
+    height = max_y - min_y
+
+    # Calculate a safe font size - small enough to not touch edges
+    # Use 5% of the minimum dimension, capped at 0.5 inches
+    safe_size = min(0.5, min(width, height) * 0.05)
+
+    # Create label text
+    label_text = f"{wall_name}{shelf_height}\""
+
+    # Add text at centroid
+    text = msp.add_text(
+        label_text,
+        dxfattribs={
+            'layer': 'LABELS',
+            'height': safe_size,
+            'style': 'Standard',
+        }
+    )
+    text.set_placement((centroid_x, centroid_y, 0.0), align=TextEntityAlignment.MIDDLE_CENTER)
+
+    # Save the DXF file
+    doc.saveas(filepath)
+
+
+def export_all_shelves_to_combined_dxf(placements, filepath, bin_width=96, bin_height=48):
+    """Export all shelves to a single DXF file with non-overlapping bounding boxes.
+
+    Args:
+        placements: List of (bin_num, polygon, x, y, rotated, shelf_height, wall_name) tuples
+        filepath: Output DXF file path
+        bin_width: Width of each plywood sheet
+        bin_height: Height of each plywood sheet
+    """
+    filepath = Path(filepath)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+
+    # Create a new DXF document
+    doc = ezdxf.new('R2010', setup=True)
+    doc.units = units.IN  # Set units to inches
+
+    msp = doc.modelspace()
+
+    # Group placements by bin number
+    bins = {}
+    for bin_num, poly, x, y, rotated, shelf_height, wall_name in placements:
+        if bin_num not in bins:
+            bins[bin_num] = []
+        bins[bin_num].append((poly, x, y, rotated, shelf_height, wall_name))
+
+    # Place each bin side by side with spacing
+    bin_spacing = 4  # 4" spacing between sheets
+    current_x_offset = 0
+
+    for bin_num in sorted(bins.keys()):
+        bin_placements = bins[bin_num]
+
+        # Add each polygon in this bin
+        for poly, x, y, rotated, shelf_height, wall_name in bin_placements:
+            # Position polygon with bin offset
+            poly_placed = poly + np.array([x + current_x_offset, y])
+
+            # Convert to 3D points
+            points_3d = [(float(px), float(py), 0.0) for px, py in poly_placed]
+
+            # Add closed polyline
+            polyline = msp.add_lwpolyline(points_3d, close=True)
+            polyline.dxf.layer = "OUTLINE"
+
+        # Move to next bin position
+        current_x_offset += bin_width + bin_spacing
+
+    # Save the DXF file
+    doc.saveas(filepath)
+
+    return len(bins)
 
 
 def simple_2d_pack(polygons, bin_width=96, bin_height=48):
@@ -788,6 +1739,19 @@ def main():
     shelf_length = 29.0  # 29" from door inward for intermediate shelves
     corner_radius = config.design_params['interior_corner_radius']
 
+    # Extract door fitting parameters
+    door_extension = config.design_params.get('door_extension', 0.0)
+    door_smoothing_tangent_x_east = config.design_params.get('door_smoothing_tangent_x_east', None)
+    door_smoothing_tangent_x_west_dist = config.design_params.get('door_smoothing_tangent_x_west', None)
+    door_notch_radius = config.design_params.get('door_notch_radius', 0.0)
+    door_notch_intersection_x_east = config.design_params.get('door_notch_intersection_x_east', None)
+    door_notch_intersection_x_west_dist = config.design_params.get('door_notch_intersection_x_west', None)
+
+    # Convert right shelf coordinates from wall-relative to absolute
+    # Right wall is at x=48, so "3.75" from right wall = 48 - 3.75 = 44.25 absolute
+    door_smoothing_tangent_x_west = 48.0 - door_smoothing_tangent_x_west_dist if door_smoothing_tangent_x_west_dist is not None else None
+    door_notch_intersection_x_west = 48.0 - door_notch_intersection_x_west_dist if door_notch_intersection_x_west_dist is not None else None
+
     # Storage for all polygons and visualizations
     all_polygons = []  # List of (polygon, height, wall_name) tuples
     shelves_by_height = {}  # Dict of {height: {'left': poly, 'right': poly, 'back': poly}}
@@ -827,7 +1791,12 @@ def main():
             # Export SVG with height-based naming: shelf_L19_exact.svg
             svg_path = output_dir / f'shelf_{wall_name}{height}_exact.svg'
             export_polygon_to_svg(polygon, svg_path, height, wall_name, width, poly_height)
-            print(f"    Exported: {svg_path}")
+            print(f"    Exported SVG: {svg_path}")
+
+            # Export DXF with height-based naming: shelf_L19_exact.dxf
+            dxf_path = output_dir / f'shelf_{wall_name}{height}_exact.dxf'
+            export_polygon_to_dxf(polygon, dxf_path, height, wall_name, width, poly_height)
+            print(f"    Exported DXF: {dxf_path}")
 
             # Add to polygons list for packing
             all_polygons.append((polygon, height, wall_name))
@@ -844,11 +1813,17 @@ def main():
     # LEFT INTERMEDIATE SHELVES (7" depth, 29" length)
     # =================================================================
     print(f"\nGenerating left intermediate shelves at heights: {left_intermediate_heights}")
-    np.random.seed(42)  # For reproducible random offsets
+    np.random.seed(42)  # For reproducible random offsets - left shelves
     for height in left_intermediate_heights:
         offset = np.random.uniform(0, 2 * np.pi)
-        polygon = generate_intermediate_shelf(left_depth, shelf_length, 'E',
-                                              amplitude, period, offset, corner_radius)
+        polygon = generate_intermediate_shelf(
+            left_depth, shelf_length, 'E',
+            amplitude, period, offset, corner_radius,
+            door_extension=door_extension,
+            door_smoothing_tangent_x=door_smoothing_tangent_x_east,
+            door_notch_radius=door_notch_radius,
+            door_notch_intersection_x=door_notch_intersection_x_east
+        )
 
         min_x, max_x = np.min(polygon[:, 0]), np.max(polygon[:, 0])
         min_y, max_y = np.min(polygon[:, 1]), np.max(polygon[:, 1])
@@ -858,7 +1833,12 @@ def main():
         # Export SVG: shelf_L9_exact.svg
         svg_path = output_dir / f'shelf_L{height}_exact.svg'
         export_polygon_to_svg(polygon, svg_path, height, 'L', width, poly_height)
-        print(f"  Exported: {svg_path}")
+        print(f"  Exported SVG: {svg_path}")
+
+        # Export DXF: shelf_L9_exact.dxf
+        dxf_path = output_dir / f'shelf_L{height}_exact.dxf'
+        export_polygon_to_dxf(polygon, dxf_path, height, 'L', width, poly_height)
+        print(f"  Exported DXF: {dxf_path}")
 
         # Add to polygons and visualization
         all_polygons.append((polygon, height, 'L'))
@@ -870,10 +1850,17 @@ def main():
     # RIGHT INTERMEDIATE SHELVES (4" depth, 29" length)
     # =================================================================
     print(f"\nGenerating right intermediate shelves at heights: {right_intermediate_heights}")
+    np.random.seed(43)  # For reproducible random offsets - right shelves (different seed from left)
     for height in right_intermediate_heights:
         offset = np.random.uniform(0, 2 * np.pi)
-        polygon = generate_intermediate_shelf(right_depth, shelf_length, 'W',
-                                              amplitude, period, offset, corner_radius)
+        polygon = generate_intermediate_shelf(
+            right_depth, shelf_length, 'W',
+            amplitude, period, offset, corner_radius,
+            door_extension=door_extension,
+            door_smoothing_tangent_x=door_smoothing_tangent_x_west,
+            door_notch_radius=door_notch_radius,
+            door_notch_intersection_x=door_notch_intersection_x_west
+        )
 
         min_x, max_x = np.min(polygon[:, 0]), np.max(polygon[:, 0])
         min_y, max_y = np.min(polygon[:, 1]), np.max(polygon[:, 1])
@@ -883,7 +1870,12 @@ def main():
         # Export SVG: shelf_R5_exact.svg
         svg_path = output_dir / f'shelf_R{height}_exact.svg'
         export_polygon_to_svg(polygon, svg_path, height, 'R', width, poly_height)
-        print(f"  Exported: {svg_path}")
+        print(f"  Exported SVG: {svg_path}")
+
+        # Export DXF: shelf_R5_exact.dxf
+        dxf_path = output_dir / f'shelf_R{height}_exact.dxf'
+        export_polygon_to_dxf(polygon, dxf_path, height, 'R', width, poly_height)
+        print(f"  Exported DXF: {dxf_path}")
 
         # Add to polygons and visualization
         all_polygons.append((polygon, height, 'R'))
@@ -899,6 +1891,14 @@ def main():
     num_bins = max(p[0] for p in placements) + 1
     print(f"  Using {num_bins} sheet(s)")
     print(f"  Total pieces: {len(all_polygons)}")
+
+    # =================================================================
+    # COMBINED DXF EXPORT
+    # =================================================================
+    combined_dxf_path = output_dir / 'all_shelves_combined.dxf'
+    print(f"\nGenerating combined DXF: {combined_dxf_path}")
+    num_sheets = export_all_shelves_to_combined_dxf(placements, combined_dxf_path)
+    print(f"  Exported {len(all_polygons)} shelves across {num_sheets} sheet(s)")
 
     # =================================================================
     # PDF GENERATION

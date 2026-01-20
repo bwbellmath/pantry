@@ -10,12 +10,18 @@
   "design_params": {
     "sinusoid_period": 24.0,
     "sinusoid_amplitude": 1.0,
-    "shelf_base_depth_east": 7.0,
+    "shelf_base_depth_east": 9.0,
     "shelf_base_depth_south": 19.0,
-    "shelf_base_depth_west": 4.0,
+    "shelf_base_depth_west": 5.0,
     "shelf_thickness": 1.0,
     "interior_corner_radius": 3.0,
-    "door_corner_radius": 3.0
+    "door_corner_radius": 3.0,
+    "door_extension": 0.75,
+    "door_smoothing_tangent_x_east": 7.5625,
+    "door_smoothing_tangent_x_west": 3.75,
+    "door_notch_radius": 0.75,
+    "door_notch_intersection_x_east": 6.3125,
+    "door_notch_intersection_x_west": 2.5625
   },
   "shelves": [
     {
