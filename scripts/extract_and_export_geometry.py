@@ -19,6 +19,7 @@ from ezdxf import units
 from ezdxf.enums import TextEntityAlignment
 from geometry import (
     solve_tangent_circle_two_sinusoids,
+    solve_tangent_circle_two_sinusoids_newton,
     generate_circle_arc,
     generate_sinusoid_points,
     wall_to_pantry_coords,
@@ -431,12 +432,24 @@ def solve_door_smoothing_radius(door_y, tangent_x, depth, amplitude, period, off
     return center_x, center_y, best_radius, best_y_t
 
 
-def solve_door_smoothing_fixed_radius(door_y, anchor_x, depth, amplitude, period, offset, radius, side='E'):
+def solve_door_smoothing_fixed_radius(
+    door_y,
+    anchor_x,
+    depth,
+    amplitude,
+    period,
+    offset,
+    radius,
+    side='E',
+    pantry_width=None,
+    pantry_depth=None
+):
     """
-    Solve for door smoothing arc using min_q bracketing approach.
+    Solve for door smoothing arc with a fixed tangency point on the door line.
 
-    Rotates circle center around anchor point and brackets on theta to find tangency.
-    Uses q(x;theta) = (x-cx)^2 + (y_sine(x)-cy)^2 - r^2 minimization.
+    The circle is tangent to the door line at (anchor_x, door_y), so the center is
+    fixed at (anchor_x, door_y + radius). We then find the tangency point on the
+    sinusoid by minimizing q(y) and requiring min_q == 0.
 
     Args:
         door_y: Y-coordinate of anchor point (door line, typically -0.75")
@@ -452,23 +465,15 @@ def solve_door_smoothing_fixed_radius(door_y, anchor_x, depth, amplitude, period
         (center_x, center_y, radius, tangent_x, tangent_y) or (None, None, None, None, None)
     """
 
-    # Convert from x(y) to y(x) parameterization
-    # Our sinusoid is x(y), need to sample along x-axis instead
+    width = pantry_width if pantry_width is not None else 48.0
+    depth_limit = pantry_depth if pantry_depth is not None else 29.0
+
     def sinusoid_x(y):
         """X-coordinate on sinusoid at given y (original parameterization)."""
         if side == 'E':
             return depth + amplitude * np.sin(2 * np.pi * y / period + offset)
         else:  # 'W'
-            return 48 - depth - amplitude * np.sin(2 * np.pi * y / period + offset)
-
-    def center_from_theta(theta):
-        """Center position from rotation angle."""
-        if side == 'E':
-            # Left shelf: rotate from anchor rightward/upward
-            return (anchor_x + radius * np.cos(theta), door_y + radius * np.sin(theta))
-        else:
-            # Right shelf: rotate from anchor leftward/upward (theta=0 points inward)
-            return (anchor_x - radius * np.cos(theta), door_y + radius * np.sin(theta))
+            return width - depth - amplitude * np.sin(2 * np.pi * y / period + offset)
 
     def q_of_y(y, cx, cy):
         """q = (x_sine(y) - cx)^2 + (y - cy)^2 - r^2"""
@@ -480,11 +485,11 @@ def solve_door_smoothing_fixed_radius(door_y, anchor_x, depth, amplitude, period
         return dx * dx + dy * dy - radius * radius
 
     def min_q_over_y(cx, cy, samples=1200):
-        """Find minimum of q over y in [door_y, 29]."""
-        y_min = max(door_y, cy - radius)
-        y_max = min(29.0, cy + radius)
+        """Find minimum of q over y in [0, depth_limit] with coarse+refine."""
+        y_min = 0.0
+        y_max = min(depth_limit, cy + radius)
         if y_max <= y_min:
-            return door_y, float('inf')
+            return 0.0, float('inf')
 
         # Coarse sample
         best_q = float('inf')
@@ -523,52 +528,12 @@ def solve_door_smoothing_fixed_radius(door_y, anchor_x, depth, amplitude, period
         y = 0.5 * (lo + hi)
         return y, q_of_y(y, cx, cy)
 
-    def g(theta):
-        """min_q as function of theta."""
-        cx, cy = center_from_theta(theta)
-        _, mq = min_q_over_y(cx, cy)
-        return mq
+    # Fixed center: tangent to door line at anchor_x
+    cx = anchor_x
+    cy = door_y + radius
+    if cx < 0.0 or cx > width or cy < 0.0 or cy > depth_limit:
+        return None, None, None, None, None
 
-    # Find bracket on theta where g changes sign
-    theta_lo = -np.pi / 2
-    theta_hi = np.pi / 2
-    theta_samples = 200
-
-    thetas = np.linspace(theta_lo, theta_hi, theta_samples + 1)
-    vals = [g(t) for t in thetas]
-
-    # Check for already near zero
-    best_i = min(range(len(vals)), key=lambda i: abs(vals[i]) if np.isfinite(vals[i]) else float('inf'))
-    if abs(vals[best_i]) < 1e-7:
-        i = best_i
-        lo = thetas[max(0, i - 1)]
-        hi = thetas[min(theta_samples, i + 1)]
-    else:
-        # Find sign change
-        found = False
-        for i in range(theta_samples):
-            v0, v1 = vals[i], vals[i + 1]
-            if np.isfinite(v0) and np.isfinite(v1) and v0 * v1 < 0:
-                lo, hi = thetas[i], thetas[i + 1]
-                found = True
-                break
-        if not found:
-            return None, None, None, None, None
-
-    # Bisect to find theta* where g(theta*) = 0
-    for _ in range(70):
-        mid = 0.5 * (lo + hi)
-        gmid = g(mid)
-        if abs(gmid) < 1e-9 or (hi - lo) < 1e-9:
-            break
-        glo = g(lo)
-        if glo * gmid <= 0:
-            hi = mid
-        else:
-            lo = mid
-
-    theta_star = 0.5 * (lo + hi)
-    cx, cy = center_from_theta(theta_star)
     y_touch, mq = min_q_over_y(cx, cy, samples=2000)
 
     if abs(mq) > 1e-6:
@@ -580,7 +545,7 @@ def solve_door_smoothing_fixed_radius(door_y, anchor_x, depth, amplitude, period
 
 def generate_intermediate_shelf(depth, length, side, amplitude, period, offset, corner_radius=3.0,
                                door_extension=0.0, door_smoothing_tangent_x=None, door_notch_radius=0.0,
-                               door_notch_intersection_x=None):
+                               door_notch_intersection_x=None, door_line_x=None, pantry_width=48.0, pantry_depth=49.0):
     """
     Generate a simple intermediate shelf polygon with corner radiusing at back interior corner
     and optional door-fitting features.
@@ -631,7 +596,10 @@ def generate_intermediate_shelf(depth, length, side, amplitude, period, offset, 
         angle_sinusoid = np.arctan2(tangent_y - center_y, x_sinusoid_tangent - center_x)
 
         # Door features (if enabled)
-        has_door_features = door_extension > 0 and door_smoothing_tangent_x is not None
+        has_door_features = door_extension > 0 and (
+            door_smoothing_tangent_x is not None or door_line_x is not None or
+            (door_notch_radius > 0 and door_notch_intersection_x is not None)
+        )
 
         if has_door_features:
             # === LEFT SHELF WITH DOOR FEATURES ===
@@ -641,6 +609,11 @@ def generate_intermediate_shelf(depth, length, side, amplitude, period, offset, 
             polygon.append([0, 0])
 
             # 2. Line from wall to notch intersection along y=0 (if notch exists)
+            if door_notch_radius > 0 and door_notch_intersection_x is not None:
+                smoothing_anchor_x = door_notch_intersection_x + door_notch_radius + 0.625
+            else:
+                smoothing_anchor_x = door_line_x if door_line_x is not None else door_smoothing_tangent_x
+
             if door_notch_radius > 0 and door_notch_intersection_x is not None:
                 # Go from wall to notch point b along y=0
                 polygon.append([door_notch_intersection_x, 0])
@@ -658,18 +631,21 @@ def generate_intermediate_shelf(depth, length, side, amplitude, period, offset, 
                     y = notch_center_y + door_notch_radius * np.sin(angle)
                     polygon.append([x, y])
 
-                # 4. Now at point a, continue along door line to smoothing tangent
-                polygon.append([door_smoothing_tangent_x, door_y])
+                # 4. Now at point a, continue along door line to smoothing anchor
+                polygon.append([smoothing_anchor_x, door_y])
             else:
-                # No notch, just door-line to smoothing tangent
-                polygon.append([door_smoothing_tangent_x, door_y])
+                # No notch, just door-line to smoothing anchor
+                polygon.append([smoothing_anchor_x, door_y])
 
             # 7. Door smoothing arc (convex) - NEW FIXED-RADIUS APPROACH
             # Anchor point is 5/8" to the right of notch end point
-            anchor_x_left = door_notch_intersection_x + door_notch_radius + 0.625
+            anchor_x_left = smoothing_anchor_x
             min_radius = 5.0  # Default minimum radius
             smooth_center_x, smooth_center_y, smooth_radius, smooth_tangent_x, smooth_tangent_y = \
-                solve_door_smoothing_fixed_radius(door_y, anchor_x_left, depth, amplitude, period, offset, min_radius, side='E')
+                solve_door_smoothing_fixed_radius(
+                    door_y, anchor_x_left, depth, amplitude, period, offset, min_radius, side='E',
+                    pantry_width=pantry_width, pantry_depth=pantry_depth
+                )
 
             if smooth_center_x is not None:
                 # Smoothing solution found
@@ -838,7 +814,10 @@ def generate_intermediate_shelf(depth, length, side, amplitude, period, offset, 
         angle_sinusoid = np.arctan2(tangent_y - center_y, x_sinusoid_tangent - center_x)
 
         # Door features (if enabled)
-        has_door_features = door_extension > 0 and door_smoothing_tangent_x is not None
+        has_door_features = door_extension > 0 and (
+            door_smoothing_tangent_x is not None or door_line_x is not None or
+            (door_notch_radius > 0 and door_notch_intersection_x is not None)
+        )
 
         if has_door_features:
             # === RIGHT SHELF WITH DOOR FEATURES ===
@@ -848,6 +827,11 @@ def generate_intermediate_shelf(depth, length, side, amplitude, period, offset, 
             polygon.append([48, 0])
 
             # 2. Line from wall to notch intersection along y=0 (if notch exists)
+            if door_notch_radius > 0 and door_notch_intersection_x is not None:
+                smoothing_anchor_x = door_notch_intersection_x - door_notch_radius - 0.625
+            else:
+                smoothing_anchor_x = door_line_x if door_line_x is not None else door_smoothing_tangent_x
+
             if door_notch_radius > 0 and door_notch_intersection_x is not None:
                 # Go from wall to notch point b along y=0
                 polygon.append([door_notch_intersection_x, 0])
@@ -865,18 +849,21 @@ def generate_intermediate_shelf(depth, length, side, amplitude, period, offset, 
                     y = notch_center_y + door_notch_radius * np.sin(angle)
                     polygon.append([x, y])
 
-                # 5. Now at point a, continue along door line to smoothing tangent
-                polygon.append([door_smoothing_tangent_x, door_y])
+                # 5. Now at point a, continue along door line to smoothing anchor
+                polygon.append([smoothing_anchor_x, door_y])
             else:
-                # No notch, just door-line to smoothing tangent
-                polygon.append([door_smoothing_tangent_x, door_y])
+                # No notch, just door-line to smoothing anchor
+                polygon.append([smoothing_anchor_x, door_y])
 
             # 7. Door smoothing arc (convex) - NEW FIXED-RADIUS APPROACH
             # Anchor point is 5/8" to the left of notch end point
-            anchor_x_right = door_notch_intersection_x - door_notch_radius - 0.625
+            anchor_x_right = smoothing_anchor_x
             min_radius = 5.0  # Default minimum radius
             smooth_center_x, smooth_center_y, smooth_radius, smooth_tangent_x, smooth_tangent_y = \
-                solve_door_smoothing_fixed_radius(door_y, anchor_x_right, depth, amplitude, period, offset, min_radius, side='W')
+                solve_door_smoothing_fixed_radius(
+                    door_y, anchor_x_right, depth, amplitude, period, offset, min_radius, side='W',
+                    pantry_width=pantry_width, pantry_depth=pantry_depth
+                )
 
             if smooth_center_x is not None:
                 # Smoothing solution found
@@ -1077,26 +1064,22 @@ def extract_exact_shelf_geometries(config, level):
 
     # Solve for corner arcs - EXACT same as in generate_shelves.py
     try:
-        lb_center, lb_point1, lb_point2, lb_pos1, lb_pos2 = solve_tangent_circle_two_sinusoids(
-            pos1_init=pantry_depth - 10,
+        # Use new Newton solver for robust tangent circle finding
+        lb_center, lb_point1, lb_point2 = solve_tangent_circle_two_sinusoids_newton(
             base_depth1=left_depth,
             amplitude1=amplitude,
             period1=period,
             offset1=left_offset,
-            pos2_init=10,
+            wall1_type='L',
             base_depth2=back_depth,
             amplitude2=amplitude,
             period2=period,
             offset2=back_offset,
-            radius=radius,
-            wall1_type='L',
             wall2_type='B',
+            radius=radius,
             pantry_width=pantry_width,
             pantry_depth=pantry_depth,
-            corner_type='left-back',
-            left_params=left_params,
-            right_params=right_params,
-            back_params=back_params
+            corner_type='left-back'
         )
         lb_arc_original = generate_circle_arc(lb_center, lb_point1, lb_point2, num_points=30, interior_arc=True)
         # Reverse arc so it goes from door (lb_point1) to back (lb_point2) for side shelves
@@ -1111,26 +1094,22 @@ def extract_exact_shelf_geometries(config, level):
         return None
 
     try:
-        rb_center, rb_point1, rb_point2, rb_pos1, rb_pos2 = solve_tangent_circle_two_sinusoids(
-            pos1_init=pantry_depth - 10,
+        # Use new Newton solver for robust tangent circle finding
+        rb_center, rb_point1, rb_point2 = solve_tangent_circle_two_sinusoids_newton(
             base_depth1=right_depth,
             amplitude1=amplitude,
             period1=period,
             offset1=right_offset,
-            pos2_init=pantry_width - 10,
+            wall1_type='R',
             base_depth2=back_depth,
             amplitude2=amplitude,
             period2=period,
             offset2=back_offset,
-            radius=radius,
-            wall1_type='R',
             wall2_type='B',
+            radius=radius,
             pantry_width=pantry_width,
             pantry_depth=pantry_depth,
-            corner_type='right-back',
-            left_params=left_params,
-            right_params=right_params,
-            back_params=back_params
+            corner_type='right-back'
         )
         rb_arc_original = generate_circle_arc(rb_center, rb_point1, rb_point2, num_points=30, interior_arc=True)
         # Reverse arc so it goes from door (rb_point1) to back (rb_point2) for side shelves
@@ -1732,6 +1711,8 @@ def main():
     levels = sorted(set(s['level'] for s in config.shelves))
 
     # Extract geometry parameters
+    pantry_width = config.pantry['width']
+    pantry_depth = config.pantry['depth']
     amplitude = config.design_params['sinusoid_amplitude']
     period = config.design_params['sinusoid_period']
     left_depth = config.design_params['shelf_base_depth_east']
@@ -1748,9 +1729,14 @@ def main():
     door_notch_intersection_x_west_dist = config.design_params.get('door_notch_intersection_x_west', None)
 
     # Convert right shelf coordinates from wall-relative to absolute
-    # Right wall is at x=48, so "3.75" from right wall = 48 - 3.75 = 44.25 absolute
-    door_smoothing_tangent_x_west = 48.0 - door_smoothing_tangent_x_west_dist if door_smoothing_tangent_x_west_dist is not None else None
-    door_notch_intersection_x_west = 48.0 - door_notch_intersection_x_west_dist if door_notch_intersection_x_west_dist is not None else None
+    # Right wall is at x=pantry_width, so "3.75" from right wall = pantry_width - 3.75
+    door_smoothing_tangent_x_west = pantry_width - door_smoothing_tangent_x_west_dist if door_smoothing_tangent_x_west_dist is not None else None
+    door_notch_intersection_x_west = pantry_width - door_notch_intersection_x_west_dist if door_notch_intersection_x_west_dist is not None else None
+
+    door_line_x_east = config.pantry.get('door_clearance_east', None)
+    door_line_x_west = None
+    if config.pantry.get('door_clearance_west', None) is not None:
+        door_line_x_west = pantry_width - config.pantry['door_clearance_west']
 
     # Storage for all polygons and visualizations
     all_polygons = []  # List of (polygon, height, wall_name) tuples
@@ -1822,7 +1808,10 @@ def main():
             door_extension=door_extension,
             door_smoothing_tangent_x=door_smoothing_tangent_x_east,
             door_notch_radius=door_notch_radius,
-            door_notch_intersection_x=door_notch_intersection_x_east
+            door_notch_intersection_x=door_notch_intersection_x_east,
+            door_line_x=door_line_x_east,
+            pantry_width=pantry_width,
+            pantry_depth=pantry_depth
         )
 
         min_x, max_x = np.min(polygon[:, 0]), np.max(polygon[:, 0])
@@ -1859,7 +1848,10 @@ def main():
             door_extension=door_extension,
             door_smoothing_tangent_x=door_smoothing_tangent_x_west,
             door_notch_radius=door_notch_radius,
-            door_notch_intersection_x=door_notch_intersection_x_west
+            door_notch_intersection_x=door_notch_intersection_x_west,
+            door_line_x=door_line_x_west,
+            pantry_width=pantry_width,
+            pantry_depth=pantry_depth
         )
 
         min_x, max_x = np.min(polygon[:, 0]), np.max(polygon[:, 0])
@@ -1901,56 +1893,56 @@ def main():
     print(f"  Exported {len(all_polygons)} shelves across {num_sheets} sheet(s)")
 
     # =================================================================
-    # PDF GENERATION
+    # PDF GENERATION - COMMENTED OUT (use generate_from_patterns.py instead)
     # =================================================================
-    pdf_path = output_dir / 'exact_cutting_templates.pdf'
-    print(f"\nGenerating PDF: {pdf_path}")
+    # pdf_path = output_dir / 'exact_cutting_templates.pdf'
+    # print(f"\nGenerating PDF: {pdf_path}")
 
-    with PdfPages(pdf_path) as pdf:
-        # Title page
-        fig = plt.figure(figsize=(11, 8.5))
-        ax = fig.add_subplot(111)
-        ax.axis('off')
+    # with PdfPages(pdf_path) as pdf:
+    #     # Title page
+    #     fig = plt.figure(figsize=(11, 8.5))
+    #     ax = fig.add_subplot(111)
+    #     ax.axis('off')
 
-        title_text = (
-            f'Pantry Shelf Cutting Templates - EXACT GEOMETRY\n\n'
-            f'Config: {config.version}\n'
-            f'Pantry: {config.pantry["width"]}" × {config.pantry["depth"]}" × {config.pantry["height"]}"\n'
-            f'Main Shelves: {len(main_shelf_heights)} at heights {main_shelf_heights}\n'
-            f'Left Intermediate: {len(left_intermediate_heights)} at heights {left_intermediate_heights}\n'
-            f'Right Intermediate: {len(right_intermediate_heights)} at heights {right_intermediate_heights}\n'
-            f'Total Pieces: {len(all_polygons)}\n'
-            f'Sheets: {num_bins}\n\n'
-            f'Geometry extracted from exact solver\n'
-            f'SVG files use identical coordinates'
-        )
+    #     title_text = (
+    #         f'Pantry Shelf Cutting Templates - EXACT GEOMETRY\n\n'
+    #         f'Config: {config.version}\n'
+    #         f'Pantry: {config.pantry["width"]}" × {config.pantry["depth"]}" × {config.pantry["height"]}"\n'
+    #         f'Main Shelves: {len(main_shelf_heights)} at heights {main_shelf_heights}\n'
+    #         f'Left Intermediate: {len(left_intermediate_heights)} at heights {left_intermediate_heights}\n'
+    #         f'Right Intermediate: {len(right_intermediate_heights)} at heights {right_intermediate_heights}\n'
+    #         f'Total Pieces: {len(all_polygons)}\n'
+    #         f'Sheets: {num_bins}\n\n'
+    #         f'Geometry extracted from exact solver\n'
+    #         f'SVG files use identical coordinates'
+    #     )
 
-        ax.text(0.5, 0.5, title_text,
-               transform=ax.transAxes, fontsize=12, ha='center', va='center',
-               bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
-        pdf.savefig(fig, bbox_inches='tight')
-        plt.close()
+    #     ax.text(0.5, 0.5, title_text,
+    #            transform=ax.transAxes, fontsize=12, ha='center', va='center',
+    #            bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+    #     pdf.savefig(fig, bbox_inches='tight')
+    #     plt.close()
 
-        # Visualization pages - one per height level
-        print("  Generating height-level visualization pages...")
-        for height in sorted(shelves_by_height.keys()):
-            fig = plt.figure(figsize=(11, 8.5))
-            ax = fig.add_subplot(111)
-            create_height_level_page(ax, height, shelves_by_height[height])
-            pdf.savefig(fig, bbox_inches='tight')
-            plt.close()
-            print(f"    Added visualization for height {height}\"")
+    #     # Visualization pages - one per height level
+    #     print("  Generating height-level visualization pages...")
+    #     for height in sorted(shelves_by_height.keys()):
+    #         fig = plt.figure(figsize=(11, 8.5))
+    #         ax = fig.add_subplot(111)
+    #         create_height_level_page(ax, height, shelves_by_height[height])
+    #         pdf.savefig(fig, bbox_inches='tight')
+    #         plt.close()
+    #         print(f"    Added visualization for height {height}\"")
 
-        # Plywood pages - LIFE-SIZE at high resolution
-        print("  Generating plywood layout pages...")
-        for bin_num in range(num_bins):
-            # Life-size: 96" x 48" at 150 DPI for high-quality printing
-            fig = plt.figure(figsize=(96, 48), dpi=150)
-            ax = fig.add_subplot(111)
-            create_plywood_page(ax, bin_num, placements)
-            pdf.savefig(fig, dpi=150, bbox_inches='tight')
-            plt.close()
-            print(f"    Added plywood sheet {bin_num + 1} (life-size, 150 DPI)")
+    #     # Plywood pages - LIFE-SIZE at high resolution
+    #     print("  Generating plywood layout pages...")
+    #     for bin_num in range(num_bins):
+    #         # Life-size: 96" x 48" at 150 DPI for high-quality printing
+    #         fig = plt.figure(figsize=(96, 48), dpi=150)
+    #         ax = fig.add_subplot(111)
+    #         create_plywood_page(ax, bin_num, placements)
+    #         pdf.savefig(fig, dpi=150, bbox_inches='tight')
+    #         plt.close()
+    #         print(f"    Added plywood sheet {bin_num + 1} (life-size, 150 DPI)")
 
     print(f"\nDone!")
     print(f"Total shelf heights: {len(shelves_by_height)}")

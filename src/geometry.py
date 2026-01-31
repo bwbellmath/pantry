@@ -3,7 +3,8 @@ Geometric calculations for sinusoidal shelf edges and corner radiusing.
 """
 
 import numpy as np
-from typing import Tuple, List, Optional
+import math
+from typing import Tuple, List, Optional, Dict
 from scipy.optimize import minimize
 
 
@@ -517,12 +518,55 @@ def solve_tangent_circle_two_sinusoids(
 
         return best_error
 
-    # Initial guess
-    x0 = np.array([pos1_init, pos2_init])
+    # For back corners, try multiple starting points and pick the best solution
+    # where point2 is on the correct side of the sinusoid
+    if corner_type in ['left-back', 'right-back']:
+        best_result = None
+        best_score = float('inf')
+        back_centerline_y = pantry_depth - base_depth2
 
-    # Optimize
-    result = minimize(objective, x0, method='Nelder-Mead',
-                     options={'xatol': 1e-6, 'fatol': 1e-6, 'maxiter': 1000})
+        # Try multiple starting points
+        for offset_mult in [0.5, 1.0, 1.5, 2.0, 2.5]:
+            if wall2_type == 'B':  # pos2 is x-coordinate on back wall
+                if corner_type == 'left-back':
+                    x0_pos2 = base_depth1 + offset_mult * radius
+                else:  # right-back
+                    x0_pos2 = pantry_width - base_depth1 - offset_mult * radius
+            else:
+                x0_pos2 = pos2_init
+
+            x0 = np.array([pos1_init, x0_pos2])
+            result = minimize(objective, x0, method='Nelder-Mead',
+                            options={'xatol': 1e-6, 'fatol': 1e-6, 'maxiter': 1000})
+
+            if result.success:
+                pos1_test, pos2_test = result.x
+                point2_test, _ = get_point_and_tangent(pos2_test, base_depth2, amplitude2, period2, offset2, wall2_type)
+
+                # Score: prefer solutions where point2 is on front side (y < centerline)
+                # and has low optimization error
+                dist_from_centerline = point2_test[1] - back_centerline_y
+                if dist_from_centerline < 0:  # Front side (desired)
+                    score = result.fun + 0.1 * abs(dist_from_centerline)
+                else:  # Back side (penalize heavily)
+                    score = result.fun + 1000.0 * dist_from_centerline
+
+                if score < best_score:
+                    best_score = score
+                    best_result = result
+
+        if best_result is None:
+            # Fallback to single optimization
+            x0 = np.array([pos1_init, pos2_init])
+            result = minimize(objective, x0, method='Nelder-Mead',
+                            options={'xatol': 1e-6, 'fatol': 1e-6, 'maxiter': 1000})
+        else:
+            result = best_result
+    else:
+        # Original single optimization for non-back corners
+        x0 = np.array([pos1_init, pos2_init])
+        result = minimize(objective, x0, method='Nelder-Mead',
+                         options={'xatol': 1e-6, 'fatol': 1e-6, 'maxiter': 1000})
 
     if not result.success:
         print(f"Warning: Optimization did not converge. Message: {result.message}")
@@ -533,6 +577,7 @@ def solve_tangent_circle_two_sinusoids(
     # Reconstruct the solution
     point1, tangent1 = get_point_and_tangent(pos1_opt, base_depth1, amplitude1, period1, offset1, wall1_type)
     point2, tangent2 = get_point_and_tangent(pos2_opt, base_depth2, amplitude2, period2, offset2, wall2_type)
+
 
     # Find the correct normals and center
     normal1_option1 = np.array([-tangent1[1], tangent1[0]])
@@ -548,40 +593,72 @@ def solve_tangent_circle_two_sinusoids(
                          right_params is not None and
                          back_params is not None)
 
-    for n1 in [normal1_option1, normal1_option2]:
-        for n2 in [normal2_option1, normal2_option2]:
+    # For back corners (left-back, right-back), ALWAYS use corner_type method
+    # because the interior check doesn't work correctly for these cases
+    use_corner_type_method = (corner_type in ['left-back', 'right-back'])
+
+    # If no interior check available OR if we should use corner_type method, use corner_type to determine correct normals
+    if not can_check_interior or use_corner_type_method:
+        # For interior corners, we need specific normal directions:
+        # - left-back: left normal points right (+x), back normal points down (-y)
+        # - right-back: right normal points left (-x), back normal points down (-y)
+
+        if corner_type == 'left-back':
+            # Left sinusoid: choose normal pointing right (positive x direction)
+            # Back sinusoid: choose normal pointing down (negative y direction)
+            n1 = normal1_option1 if normal1_option1[0] > 0 else normal1_option2
+            n2 = normal2_option1 if normal2_option1[1] < 0 else normal2_option2
+        elif corner_type == 'right-back':
+            # Right sinusoid: choose normal pointing left (negative x direction)
+            # Back sinusoid: choose normal pointing down (negative y direction)
+            n1 = normal1_option1 if normal1_option1[0] < 0 else normal1_option2
+            n2 = normal2_option1 if normal2_option1[1] < 0 else normal2_option2
+        else:
+            # Fallback: try all combinations
+            n1, n2 = None, None
+
+        if n1 is not None and n2 is not None:
             center1 = point1 + radius * n1
             center2 = point2 + radius * n2
-            center = (center1 + center2) / 2
-            error = np.linalg.norm(center1 - center2)
+            best_center = (center1 + center2) / 2
+            best_error = np.linalg.norm(center1 - center2)
 
-            # Check if center is in interior region
-            valid_orientation = True
-            if can_check_interior:
-                valid_orientation = is_point_in_interior(
-                    center,
-                    left_params[0], left_params[1], left_params[2], left_params[3],
-                    right_params[0], right_params[1], right_params[2], right_params[3],
-                    back_params[0], back_params[1], back_params[2], back_params[3],
-                    pantry_width, pantry_depth
-                )
-
-            # Only consider solutions with valid orientation (in interior)
-            if valid_orientation and error < best_error:
-                best_error = error
-                best_center = center
-
+    # Only try all combinations if we have interior check or if corner_type didn't give us a solution
     if best_center is None:
-        # Fallback if no valid interior solution found
-        print("Warning: No valid interior solution found, using best geometric match")
         for n1 in [normal1_option1, normal1_option2]:
             for n2 in [normal2_option1, normal2_option2]:
                 center1 = point1 + radius * n1
                 center2 = point2 + radius * n2
+                center = (center1 + center2) / 2
                 error = np.linalg.norm(center1 - center2)
-                if error < best_error:
+
+                # Check if center is in interior region
+                valid_orientation = True
+                if can_check_interior:
+                    valid_orientation = is_point_in_interior(
+                        center,
+                        left_params[0], left_params[1], left_params[2], left_params[3],
+                        right_params[0], right_params[1], right_params[2], right_params[3],
+                        back_params[0], back_params[1], back_params[2], back_params[3],
+                        pantry_width, pantry_depth
+                    )
+
+                # Only consider solutions with valid orientation (in interior)
+                if valid_orientation and error < best_error:
                     best_error = error
-                    best_center = (center1 + center2) / 2
+                    best_center = center
+
+        if best_center is None:
+            # Final fallback if no valid interior solution found
+            print("Warning: No valid interior solution found, using best geometric match")
+            for n1 in [normal1_option1, normal1_option2]:
+                for n2 in [normal2_option1, normal2_option2]:
+                    center1 = point1 + radius * n1
+                    center2 = point2 + radius * n2
+                    error = np.linalg.norm(center1 - center2)
+                    if error < best_error:
+                        best_error = error
+                        best_center = (center1 + center2) / 2
 
     return best_center, point1, point2, pos1_opt, pos2_opt
 
@@ -723,3 +800,329 @@ def generate_interior_mask(left_base_depth: float, left_amplitude: float, left_p
             )
 
     return X, Y, mask
+
+
+# ============================================================================
+# NEW ROBUST TANGENT CIRCLE SOLVER - Newton's Method
+# ============================================================================
+
+def _wrap_to_pi(a: float) -> float:
+    """Wrap angle to [-π, π]."""
+    return (a + math.pi) % (2.0 * math.pi) - math.pi
+
+
+def _short_arc_span(theta_a: float, theta_b: float) -> float:
+    """Calculate the shorter arc span between two angles."""
+    return abs(_wrap_to_pi(theta_b - theta_a))
+
+
+def _newton_2d(
+    F, x0: Tuple[float, float],
+    tol: float = 1e-12,
+    max_iter: int = 60,
+    fd_eps: float = 1e-7
+) -> Optional[Tuple[float, float]]:
+    """2D Newton with finite-difference Jacobian + backtracking."""
+    x, y = x0
+
+    def norm2(v):
+        return math.hypot(v[0], v[1])
+
+    fx, fy = F(x, y)
+    fn = norm2((fx, fy))
+
+    for _ in range(max_iter):
+        if fn < tol:
+            return (x, y)
+
+        # FD Jacobian J = [[dFx/dx, dFx/dy],[dFy/dx, dFy/dy]]
+        hx = fd_eps * (1.0 + abs(x))
+        hy = fd_eps * (1.0 + abs(y))
+
+        fpx = F(x + hx, y)
+        fmx = F(x - hx, y)
+        dFdx = ((fpx[0] - fmx[0]) / (2 * hx), (fpx[1] - fmx[1]) / (2 * hx))
+
+        fpy = F(x, y + hy)
+        fmy = F(x, y - hy)
+        dFdy = ((fpy[0] - fmy[0]) / (2 * hy), (fpy[1] - fmy[1]) / (2 * hy))
+
+        a, c = dFdx  # dFx/dx, dFy/dx
+        b, d = dFdy  # dFx/dy, dFy/dy
+
+        det = a * d - b * c
+        if abs(det) < 1e-18:
+            return None
+
+        # Solve J * [dx, dy]^T = -F via 2x2 inverse
+        dx = (-fx * d + b * fy) / det
+        dy = ( c * fx - a * fy) / det
+
+        # Backtracking line search
+        alpha = 1.0
+        accepted = False
+        for _ls in range(20):
+            xt = x + alpha * dx
+            yt = y + alpha * dy
+            g0, g1 = F(xt, yt)
+            gn = norm2((g0, g1))
+            if gn < fn:
+                x, y = xt, yt
+                fx, fy = g0, g1
+                fn = gn
+                accepted = True
+                break
+            alpha *= 0.5
+
+        if not accepted:
+            return None
+
+    return None
+
+
+def tangent_circle_two_sinusoids_offset_intersection(
+    Av: float, x_pos: float, y_off_v: float,
+    Ah: float, y_pos: float, x_off_h: float,
+    r: float,
+    quadrant: str,
+    *,
+    tol: float = 1e-12
+) -> Dict[str, object]:
+    """
+    Find tangent circle to two sinusoids using Newton's method.
+    
+    Horizontal sinusoid: y = y_pos + Ah * sin(x - x_off_h)
+    Vertical   sinusoid: x = x_pos + Av * sin(y - y_off_v)
+
+    Args:
+        Av: Amplitude of vertical sinusoid
+        x_pos: Base position of vertical sinusoid
+        y_off_v: Phase offset of vertical sinusoid
+        Ah: Amplitude of horizontal sinusoid
+        y_pos: Base position of horizontal sinusoid
+        x_off_h: Phase offset of horizontal sinusoid
+        r: Radius of tangent circle
+        quadrant: Which tangent circle: 'br', 'tr', 'tl', 'bl'
+        tol: Convergence tolerance
+
+    Returns:
+      - center: (cx, cy)
+      - points: ordered tangency points per quadrant rule
+      - short_arc_span: radians of the shorter arc between them
+      - angles: (theta1, theta2) angles to tangency points
+      - raw_points: dict with 'vertical' and 'horizontal' tangency points
+      - quadrant: the quadrant used
+    """
+
+    quadrant = quadrant.lower().strip()
+    if quadrant not in {"br", "tr", "tl", "bl"}:
+        raise ValueError("quadrant must be one of {'br','tr','tl','bl'}")
+    if r <= 0:
+        raise ValueError("r must be positive")
+
+    # Side selection from quadrant
+    # sh: +1 above horizontal curve, -1 below
+    # sv: +1 right of vertical curve, -1 left
+    sh = +1.0 if quadrant in {"tr", "tl"} else -1.0
+    sv = +1.0 if quadrant in {"tr", "br"} else -1.0
+
+    # Horizontal curve point + unit normal
+    def horiz_point_and_unit_normal(x: float):
+        y = y_pos + Ah * math.sin(x - x_off_h)
+        yp = Ah * math.cos(x - x_off_h)  # dy/dx
+        # normal direction (-yp, 1)
+        inv = 1.0 / math.sqrt(1.0 + yp * yp)
+        nx, ny = (-yp * inv, 1.0 * inv)
+        return (x, y), (nx, ny), yp
+
+    # Vertical curve point + unit normal
+    def vert_point_and_unit_normal(y: float):
+        x = x_pos + Av * math.sin(y - y_off_v)
+        xp = Av * math.cos(y - y_off_v)  # dx/dy
+        # normal direction (1, -xp)
+        inv = 1.0 / math.sqrt(1.0 + xp * xp)
+        mx, my = (1.0 * inv, -xp * inv)
+        return (x, y), (mx, my), xp
+
+    # Offset-center curves:
+    def Ch(x: float):
+        P, n, _ = horiz_point_and_unit_normal(x)
+        return (P[0] + sh * r * n[0], P[1] + sh * r * n[1])
+
+    def Cv(y: float):
+        P, m, _ = vert_point_and_unit_normal(y)
+        return (P[0] + sv * r * m[0], P[1] + sv * r * m[1])
+
+    # Solve Ch(xh) - Cv(yv) = 0
+    def F(xh: float, yv: float):
+        cxh, cyh = Ch(xh)
+        cxv, cyv = Cv(yv)
+        return (cxh - cxv, cyh - cyv)
+
+    # Initial guess: pretend both curves are locally flat at midlines
+    # => center is (x_pos +/- r, y_pos +/- r)
+    cx0 = x_pos + sv * r
+    cy0 = y_pos + sh * r
+    xh0 = cx0
+    yv0 = cy0
+
+    # Try a few 2π shifts because sinusoids repeat
+    # Use more shifts for robustness
+    shifts = [0.0, 2.0 * math.pi, -2.0 * math.pi, 4.0 * math.pi, -4.0 * math.pi]
+    best = None
+    best_score = float("inf")
+
+    for sx in shifts:
+        for sy in shifts:
+            guess = (xh0 + sx, yv0 + sy)
+            sol = _newton_2d(F, guess, tol=tol)
+            if sol is None:
+                continue
+            xh, yv = sol
+            cxh, cyh = Ch(xh)
+
+            # Quadrant sanity vs midlines
+            if sv > 0 and not (cxh > x_pos): 
+                continue
+            if sv < 0 and not (cxh < x_pos):
+                continue
+            if sh > 0 and not (cyh > y_pos):
+                continue
+            if sh < 0 and not (cyh < y_pos):
+                continue
+
+            score = (cxh - cx0) ** 2 + (cyh - cy0) ** 2
+            if score < best_score:
+                best_score = score
+                best = (xh, yv)
+
+    if best is None:
+        raise RuntimeError("No solution found (try a different branch/initialization or check radius feasibility).")
+
+    xh, yv = best
+    (xh_p, yh_p), _, _ = horiz_point_and_unit_normal(xh)
+    (xv_p, yv_p), _, _ = vert_point_and_unit_normal(yv)
+
+    # Both computed centers should match; use horizontal one
+    cx, cy = Ch(xh)
+
+    p_horz = (xh_p, yh_p)   # tangency on horizontal sinusoid
+    p_vert = (xv_p, yv_p)   # tangency on vertical sinusoid
+
+    # Order rule you specified:
+    # br: vert then horiz
+    # tr: horiz then vert
+    # bl: horiz then vert
+    # tl: vert then horiz
+    if quadrant in {"br", "tl"}:
+        ordered = [p_vert, p_horz]
+    else:
+        ordered = [p_horz, p_vert]
+
+    theta1 = math.atan2(ordered[0][1] - cy, ordered[0][0] - cx)
+    theta2 = math.atan2(ordered[1][1] - cy, ordered[1][0] - cx)
+    span = _short_arc_span(theta1, theta2)
+
+    return {
+        "center": (cx, cy),
+        "points": ordered,
+        "short_arc_span": span,
+        "angles": (theta1, theta2),
+        "raw_points": {"vertical": p_vert, "horizontal": p_horz},
+        "quadrant": quadrant,
+    }
+
+
+def solve_tangent_circle_two_sinusoids_newton(
+    base_depth1: float, amplitude1: float, period1: float, offset1: float, wall1_type: str,
+    base_depth2: float, amplitude2: float, period2: float, offset2: float, wall2_type: str,
+    radius: float,
+    pantry_width: float, pantry_depth: float,
+    corner_type: str,
+    debug: bool = False
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Wrapper to use the new Newton solver with our existing parameter format.
+    
+    Args:
+        base_depth1: Base depth of first sinusoid (offset from wall)
+        amplitude1: Amplitude of first sinusoid
+        period1: Period of first sinusoid
+        offset1: Phase offset of first sinusoid
+        wall1_type: 'L' (left/east), 'R' (right/west), or 'B' (back/south)
+        base_depth2: Base depth of second sinusoid
+        amplitude2: Amplitude of second sinusoid
+        period2: Period of second sinusoid
+        offset2: Phase offset of second sinusoid
+        wall2_type: 'L', 'R', or 'B'
+        radius: Radius of tangent circle
+        pantry_width: Width of pantry
+        pantry_depth: Depth of pantry
+        corner_type: 'left-back' or 'right-back'
+    
+    Returns:
+        Tuple of (center, point1, point2) as numpy arrays
+    """
+    
+    # For left-back corner:
+    if corner_type == 'left-back':
+        # Vertical (left) sinusoid: x = base_depth1 + amplitude1 * sin(2π*y/period1 - offset1)
+        # In scaled form: x = base_depth1 + amplitude1 * sin(y_scaled - offset1) where y_scaled = 2π*y/period1
+        # But the new solver works in unscaled coordinates, so:
+        # x = base_depth1 + amplitude1 * sin(2π/period1 * (y - offset1*period1/(2π)))
+        x_pos = base_depth1
+        Av = amplitude1
+        # For phase: we want sin(2π*y/period - offset) = sin(2π/period * (y - offset*period/(2π)))
+        y_off_v = offset1 * period1 / (2 * math.pi)
+        
+        # Horizontal (back) sinusoid: y = (pantry_depth - base_depth2) - amplitude2 * sin(2π*x/period2 - offset2)
+        # Note the negative sign! y = y_pos - amplitude * sin(...)
+        y_pos = pantry_depth - base_depth2
+        Ah = -amplitude2  # Negative!
+        x_off_h = offset2 * period2 / (2 * math.pi)
+        
+        # Quadrant: we want circle to right of left sinusoid (sv=+1) and below back sinusoid (sh=-1)
+        quadrant = 'br'
+        
+    elif corner_type == 'right-back':
+        # Vertical (right) sinusoid: x = (pantry_width - base_depth1) - amplitude1 * sin(2π*y/period1 - offset1)
+        x_pos = pantry_width - base_depth1
+        Av = -amplitude1  # Negative!
+        y_off_v = offset1 * period1 / (2 * math.pi)
+        
+        # Horizontal (back) sinusoid: same as left-back
+        y_pos = pantry_depth - base_depth2
+        Ah = -amplitude2
+        x_off_h = offset2 * period2 / (2 * math.pi)
+        
+        # Quadrant: we want circle to left of right sinusoid (sv=-1) and below back sinusoid (sh=-1)
+        quadrant = 'bl'
+    else:
+        raise ValueError(f"Unsupported corner_type: {corner_type}")
+    
+    # Call the new solver
+    result = tangent_circle_two_sinusoids_offset_intersection(
+        Av=Av, x_pos=x_pos, y_off_v=y_off_v,
+        Ah=Ah, y_pos=y_pos, x_off_h=x_off_h,
+        r=radius,
+        quadrant=quadrant
+    )
+    
+    # Extract results and convert to numpy arrays
+    center = np.array(result['center'])
+    
+    # Get the tangency points in the right order
+    # For left-back: ordered is [p_vert, p_horz], so point1=p_vert (on left), point2=p_horz (on back)
+    # For right-back: ordered is [p_horz, p_vert], so point1=p_horz (on back), point2=p_vert (on right)
+    # But we want point1 on wall1 (left/right) and point2 on wall2 (back)
+    
+    if corner_type == 'left-back':
+        # ordered = [p_vert, p_horz]
+        point1 = np.array(result['points'][0])  # on left (vertical)
+        point2 = np.array(result['points'][1])  # on back (horizontal)
+    else:  # right-back
+        # ordered = [p_horz, p_vert]
+        point1 = np.array(result['points'][1])  # on right (vertical)
+        point2 = np.array(result['points'][0])  # on back (horizontal)
+    
+    return center, point1, point2

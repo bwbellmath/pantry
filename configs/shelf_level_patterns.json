@@ -1,0 +1,741 @@
+{
+  "config_version": "pattern_v1",
+  "description": "Construction-based shelf geometry specification. Each shelf is defined as a sequence of geometric primitives (lines, arcs, sinusoid segments) that form a closed path.",
+
+  "base_dimensions": {
+    "pantry_width": 48.0,
+    "pantry_depth": 49.0,
+    "pantry_height": 105.0,
+    "door_clearance_east": 6.0,
+    "door_clearance_west": 4.0
+  },
+
+  "design_params": {
+    "sinusoid_period": 24.0,
+    "sinusoid_amplitude": 1.0,
+    "shelf_thickness": 1.0,
+    "interior_corner_radius": 3.0,
+    "door_corner_radius": 3.0,
+    "door_extension": 0.75,
+    "door_notch_radius": 0.75,
+    "door_smoothing_min_radius": 5.0
+  },
+
+  "levels": [
+    {
+      "height": 19.0,
+      "type": "main",
+      "description": "Main shelf level with left, back, and right shelves",
+
+      "base_geometry": {
+        "sinusoids": {
+          "right": {
+            "type": "vertical",
+            "wall": "W",
+            "x_base": {"ref": "pantry_width"},
+            "offset_from_wall": 5.0,
+            "y_start": 0,
+            "y_end": {"ref": "pantry_depth"},
+            "period": {"ref": "design_params.sinusoid_period"},
+            "amplitude": {"ref": "design_params.sinusoid_amplitude"},
+            "phase_offset": 2.6673226888342296
+          },
+          "left": {
+            "type": "vertical",
+            "wall": "E",
+            "x_base": 0,
+            "offset_from_wall": 8.0,
+            "y_start": 0,
+            "y_end": {"ref": "pantry_depth"},
+            "period": {"ref": "design_params.sinusoid_period"},
+            "amplitude": {"ref": "design_params.sinusoid_amplitude"},
+            "phase_offset": 3.4143139461097722
+          },
+          "back": {
+            "type": "horizontal",
+            "wall": "S",
+            "y_base": {"ref": "pantry_depth"},
+            "offset_from_wall": 19.0,
+            "x_start": 0,
+            "x_end": {"ref": "pantry_width"},
+            "period": {"ref": "design_params.sinusoid_period"},
+            "amplitude": {"ref": "design_params.sinusoid_amplitude"},
+            "phase_offset": 1.7490464303899562
+          }
+        },
+
+        "intersections": {
+          "back_right": {
+            "description": "Intersection of right and back sinusoids",
+            "sinusoid_1": "right",
+            "sinusoid_2": "back",
+            "solve_method": "two_sinusoid_intersection"
+          },
+          "back_left": {
+            "description": "Intersection of left and back sinusoids",
+            "sinusoid_1": "left",
+            "sinusoid_2": "back",
+            "solve_method": "two_sinusoid_intersection"
+          }
+        },
+
+        "arcs": {
+          "back_right_arc": {
+            "description": "Slope-matching circle at right-back corner",
+            "type": "tangent_circle",
+            "radius": {"ref": "design_params.interior_corner_radius"},
+            "tangent_to": ["right", "back"],
+            "intersection_point": {"ref": "intersections.back_right"},
+            "solve_method": "slope_matching_two_sinusoids"
+          },
+          "back_left_arc": {
+            "description": "Slope-matching circle at left-back corner",
+            "type": "tangent_circle",
+            "radius": {"ref": "design_params.interior_corner_radius"},
+            "tangent_to": ["left", "back"],
+            "intersection_point": {"ref": "intersections.back_left"},
+            "solve_method": "slope_matching_two_sinusoids"
+          }
+        },
+
+        "arc_midpoints": {
+          "back_right_arc_midpoint": {
+            "description": "Point dividing right shelf from back shelf",
+            "arc": {"ref": "arcs.back_right_arc"},
+            "position": "midpoint"
+          },
+          "back_left_arc_midpoint": {
+            "description": "Point dividing left shelf from back shelf",
+            "arc": {"ref": "arcs.back_left_arc"},
+            "position": "midpoint"
+          }
+        }
+      },
+
+      "shelves": {
+        "right": {
+          "wall": "W",
+          "name": "shelf_R19",
+          "construction": [
+            {
+              "step": 1,
+              "type": "point",
+              "description": "Start at wall/door corner",
+              "coords": [{"ref": "pantry_width"}, 0]
+            },
+            {
+              "step": 2,
+              "type": "straight_line",
+              "description": "Door edge to door notch intersection",
+              "to": [{"calc": "pantry_width - 2.5625"}, 0]
+            },
+            {
+              "step": 3,
+              "type": "arc",
+              "description": "Door notch (concave quarter-circle)",
+              "center": [{"calc": "pantry_width - 2.5625"}, {"calc": "-door_extension"}],
+              "radius": {"ref": "design_params.door_notch_radius"},
+              "start_angle": 90,
+              "end_angle": 180,
+              "direction": "ccw"
+            },
+            {
+              "step": 4,
+              "type": "straight_line",
+              "description": "Door line to smoothing arc anchor",
+              "to": [{"calc": "pantry_width - 2.5625 - door_notch_radius - 0.625"}, {"calc": "-door_extension"}]
+            },
+            {
+              "step": 5,
+              "type": "arc",
+              "description": "Door smoothing arc (convex, tangent to sinusoid)",
+              "solve_method": "tangent_horizontal_line_and_sinusoid",
+              "anchor_point": [{"calc": "pantry_width - 2.5625 - door_notch_radius - 0.625"}, {"calc": "-door_extension"}],
+              "tangent_to_sinusoid": "right",
+              "min_radius": {"ref": "design_params.door_smoothing_min_radius"},
+              "direction": "cw"
+            },
+            {
+              "step": 6,
+              "type": "sinusoid_segment",
+              "description": "Right edge sinusoid from door smoothing to back arc",
+              "sinusoid": "right",
+              "from": {"ref": "step_5.tangent_point_y"},
+              "to": {"ref": "arcs.back_right_arc.tangent_point_on_right.y"}
+            },
+            {
+              "step": 7,
+              "type": "arc_segment",
+              "description": "Back corner arc from right sinusoid to arc midpoint",
+              "arc": {"ref": "arcs.back_right_arc"},
+              "from_tangent": "right",
+              "to": {"ref": "arc_midpoints.back_right_arc_midpoint"}
+            },
+            {
+              "step": 8,
+              "type": "straight_line",
+              "description": "Horizontal line back to wall",
+              "to": [{"ref": "pantry_width"}, {"ref": "arc_midpoints.back_right_arc_midpoint.y"}]
+            },
+            {
+              "step": 9,
+              "type": "straight_line",
+              "description": "Wall edge closes path",
+              "to": [{"ref": "pantry_width"}, 0],
+              "close_path": true
+            }
+          ]
+        },
+
+        "left": {
+          "wall": "E",
+          "name": "shelf_L19",
+          "construction": [
+            {
+              "step": 1,
+              "type": "point",
+              "description": "Start at wall/door corner",
+              "coords": [0, 0]
+            },
+            {
+              "step": 2,
+              "type": "straight_line",
+              "description": "Door edge to door notch intersection",
+              "to": [{"ref": "door_clearance_east"}, 0]
+            },
+            {
+              "step": 3,
+              "type": "arc",
+              "description": "Door notch (concave quarter-circle)",
+              "center": [{"ref": "door_clearance_east"}, {"calc": "-door_extension"}],
+              "radius": {"ref": "design_params.door_notch_radius"},
+              "start_angle": 90,
+              "end_angle": 0,
+              "direction": "cw"
+            },
+            {
+              "step": 4,
+              "type": "straight_line",
+              "description": "Door line to smoothing arc anchor",
+              "to": [{"calc": "door_clearance_east + door_notch_radius + 0.625"}, {"calc": "-door_extension"}]
+            },
+            {
+              "step": 5,
+              "type": "arc",
+              "description": "Door smoothing arc (convex, tangent to sinusoid)",
+              "solve_method": "tangent_horizontal_line_and_sinusoid",
+              "anchor_point": [{"calc": "door_clearance_east + door_notch_radius + 0.625"}, {"calc": "-door_extension"}],
+              "tangent_to_sinusoid": "left",
+              "min_radius": {"ref": "design_params.door_smoothing_min_radius"},
+              "direction": "ccw"
+            },
+            {
+              "step": 6,
+              "type": "sinusoid_segment",
+              "description": "Left edge sinusoid from door smoothing to back arc",
+              "sinusoid": "left",
+              "from": {"ref": "step_5.tangent_point_y"},
+              "to": {"ref": "arcs.back_left_arc.tangent_point_on_left.y"}
+            },
+            {
+              "step": 7,
+              "type": "arc_segment",
+              "description": "Back corner arc from left sinusoid to arc midpoint",
+              "arc": {"ref": "arcs.back_left_arc"},
+              "from_tangent": "left",
+              "to": {"ref": "arc_midpoints.back_left_arc_midpoint"}
+            },
+            {
+              "step": 8,
+              "type": "straight_line",
+              "description": "Horizontal line back to wall",
+              "to": [0, {"ref": "arc_midpoints.back_left_arc_midpoint.y"}]
+            },
+            {
+              "step": 9,
+              "type": "straight_line",
+              "description": "Wall edge closes path",
+              "to": [0, 0],
+              "close_path": true
+            }
+          ]
+        },
+
+        "back": {
+          "wall": "S",
+          "name": "shelf_B19",
+          "construction": [
+            {
+              "step": 1,
+              "type": "point",
+              "description": "Start at back-left corner of pantry",
+              "coords": [0, {"ref": "pantry_depth"}]
+            },
+            {
+              "step": 2,
+              "type": "straight_line",
+              "description": "Back wall to back-right corner of pantry",
+              "to": [{"ref": "pantry_width"}, {"ref": "pantry_depth"}]
+            },
+            {
+              "step": 3,
+              "type": "straight_line",
+              "description": "Right wall to back-right corner of right shelf",
+              "to": [{"ref": "pantry_width"}, {"ref": "arc_midpoints.back_right_arc_midpoint.y"}]
+            },
+            {
+              "step": 4,
+              "type": "straight_line",
+              "description": "To right arc midpoint",
+              "to": [{"ref": "arc_midpoints.back_right_arc_midpoint.x"}, {"ref": "arc_midpoints.back_right_arc_midpoint.y"}]
+            },
+            {
+              "step": 5,
+              "type": "arc_segment",
+              "description": "Back-right corner arc from midpoint to back sinusoid",
+              "arc": {"ref": "arcs.back_right_arc"},
+              "from": {"ref": "arc_midpoints.back_right_arc_midpoint"},
+              "to_tangent": "back"
+            },
+            {
+              "step": 6,
+              "type": "sinusoid_segment",
+              "description": "Back edge sinusoid from right arc to left arc",
+              "sinusoid": "back",
+              "from": {"ref": "arcs.back_right_arc.tangent_point_on_back.x"},
+              "to": {"ref": "arcs.back_left_arc.tangent_point_on_back.x"}
+            },
+            {
+              "step": 7,
+              "type": "arc_segment",
+              "description": "Back-left corner arc from back sinusoid to midpoint",
+              "arc": {"ref": "arcs.back_left_arc"},
+              "from_tangent": "back",
+              "to": {"ref": "arc_midpoints.back_left_arc_midpoint"}
+            },
+            {
+              "step": 8,
+              "type": "straight_line",
+              "description": "To back-left corner of left shelf",
+              "to": [0, {"ref": "arc_midpoints.back_left_arc_midpoint.y"}]
+            },
+            {
+              "step": 9,
+              "type": "straight_line",
+              "description": "Left wall back to back-left corner of pantry",
+              "to": [0, {"ref": "pantry_depth"}],
+              "close_path": true
+            }
+          ]
+        }
+      }
+    },
+
+    {
+      "height": 39.0,
+      "type": "main",
+      "description": "Main shelf level with left, back, and right shelves",
+      "note": "Same construction pattern as height 19.0, different phase offsets",
+      "base_geometry": {
+        "sinusoids": {
+          "right": {"phase_offset": 0.7638413135112037},
+          "left": {"phase_offset": 5.3078849824484164},
+          "back": {"phase_offset": 0.029649447885812245}
+        }
+      },
+      "shelves": {
+        "right": {"name": "shelf_R39", "construction_template": {"ref": "levels[0].shelves.right"}},
+        "left": {"name": "shelf_L39", "construction_template": {"ref": "levels[0].shelves.left"}},
+        "back": {"name": "shelf_B39", "construction_template": {"ref": "levels[0].shelves.back"}}
+      }
+    },
+
+    {
+      "height": 59.0,
+      "type": "main",
+      "description": "Main shelf level with left, back, and right shelves",
+      "base_geometry": {
+        "sinusoids": {
+          "right": {"phase_offset": 0.8589528357031249},
+          "left": {"phase_offset": 4.214440793959451},
+          "back": {"phase_offset": 5.188985896769816}
+        }
+      },
+      "shelves": {
+        "right": {"name": "shelf_R59", "construction_template": {"ref": "levels[0].shelves.right"}},
+        "left": {"name": "shelf_L59", "construction_template": {"ref": "levels[0].shelves.left"}},
+        "back": {"name": "shelf_B59", "construction_template": {"ref": "levels[0].shelves.back"}}
+      }
+    },
+
+    {
+      "height": 79.0,
+      "type": "main",
+      "description": "Main shelf level with left, back, and right shelves",
+      "base_geometry": {
+        "sinusoids": {
+          "right": {"phase_offset": 1.3144556999175152},
+          "left": {"phase_offset": 3.6134179577142866},
+          "back": {"phase_offset": 5.600341007301412}
+        }
+      },
+      "shelves": {
+        "right": {"name": "shelf_R79", "construction_template": {"ref": "levels[0].shelves.right"}},
+        "left": {"name": "shelf_L79", "construction_template": {"ref": "levels[0].shelves.left"}},
+        "back": {"name": "shelf_B79", "construction_template": {"ref": "levels[0].shelves.back"}}
+      }
+    },
+
+    {
+      "height": 9.0,
+      "type": "intermediate_left",
+      "description": "Left wall only with door moulding",
+
+      "base_geometry": {
+        "sinusoids": {
+          "left": {
+            "type": "vertical",
+            "wall": "E",
+            "x_base": 0,
+            "offset_from_wall": 8.0,
+            "y_start": 0,
+            "y_end": 29.0,
+            "period": {"ref": "design_params.sinusoid_period"},
+            "amplitude": {"ref": "design_params.sinusoid_amplitude"},
+            "phase_offset": 0.0
+          }
+        },
+
+        "arcs": {
+          "back_arc": {
+            "description": "Back corner arc tangent to sinusoid and horizontal line",
+            "type": "tangent_circle",
+            "radius": {"ref": "design_params.interior_corner_radius"},
+            "tangent_to_sinusoid": "left",
+            "tangent_to_line": "horizontal",
+            "line_y": 29.0,
+            "solve_method": "tangent_horizontal_and_sinusoid"
+          },
+          "front_anchored_arc": {
+            "description": "Door smoothing arc using alt_9.py rotation method",
+            "type": "anchored_tangent_circle",
+            "radius": 5.0,
+            "anchor_point": [{"calc": "door_clearance_east + door_notch_radius + 0.625"}, {"calc": "-door_extension"}],
+            "tangent_to_sinusoid": "left",
+            "solve_method": "alt9_door_smoothing"
+          }
+        }
+      },
+
+      "shelves": {
+        "left": {
+          "wall": "E",
+          "name": "shelf_L9",
+          "construction": [
+            {
+              "step": 1,
+              "type": "point",
+              "description": "Start at wall/door corner",
+              "coords": [0, 0]
+            },
+            {
+              "step": 2,
+              "type": "straight_line",
+              "description": "Wall edge to back corner",
+              "to": [0, 29.0]
+            },
+            {
+              "step": 3,
+              "type": "straight_line",
+              "description": "Back edge to arc horizontal tangent",
+              "to": [{"ref": "arcs.back_arc.tangent_point_on_horizontal.x"}, 29.0]
+            },
+            {
+              "step": 4,
+              "type": "arc_segment",
+              "description": "Back corner arc from horizontal to sinusoid",
+              "arc": {"ref": "arcs.back_arc"},
+              "from_tangent": "horizontal",
+              "to_tangent": "left"
+            },
+            {
+              "step": 5,
+              "type": "sinusoid_segment",
+              "description": "Left edge sinusoid to front arc",
+              "sinusoid": "left",
+              "from": {"ref": "arcs.back_arc.tangent_point_on_left.y"},
+              "to": {"ref": "arcs.front_anchored_arc.tangent_point_on_left.y"},
+              "direction": "decreasing_y"
+            },
+            {
+              "step": 6,
+              "type": "arc_segment",
+              "description": "Front door smoothing arc (counter-clockwise)",
+              "arc": {"ref": "arcs.front_anchored_arc"},
+              "from_tangent": "left",
+              "to_tangent": "anchor"
+            },
+            {
+              "step": 7,
+              "type": "straight_line",
+              "description": "Door moulding horizontal segment (5/8 inch)",
+              "to": [{"calc": "door_clearance_east + door_notch_radius"}, {"calc": "-door_extension"}]
+            },
+            {
+              "step": 8,
+              "type": "arc",
+              "description": "Door moulding corner arc (0.75 inch radius, 90 degrees)",
+              "center": [{"ref": "door_clearance_east"}, {"calc": "-door_extension"}],
+              "radius": {"ref": "design_params.door_notch_radius"},
+              "start_angle": 0,
+              "end_angle": 90
+            },
+            {
+              "step": 9,
+              "type": "straight_line",
+              "description": "Close path back to start",
+              "to": [0, 0],
+              "close_path": true
+            }
+          ]
+        }
+      }
+    },
+
+    {
+      "height": 29.0,
+      "type": "intermediate_left",
+      "description": "Left wall only, single sinusoid with simple back corner",
+      "base_geometry": {
+        "sinusoids": {"left": {"phase_offset": 1.5707963267948966}}
+      },
+      "shelves": {
+        "left": {"name": "shelf_L29", "construction_template": {"ref": "levels[4].shelves.left"}}
+      }
+    },
+
+    {
+      "height": 49.0,
+      "type": "intermediate_left",
+      "description": "Left wall only, single sinusoid with simple back corner",
+      "base_geometry": {
+        "sinusoids": {"left": {"phase_offset": 3.141592653589793}}
+      },
+      "shelves": {
+        "left": {"name": "shelf_L49", "construction_template": {"ref": "levels[4].shelves.left"}}
+      }
+    },
+
+    {
+      "height": 69.0,
+      "type": "intermediate_left",
+      "description": "Left wall only, single sinusoid with simple back corner",
+      "base_geometry": {
+        "sinusoids": {"left": {"phase_offset": 4.71238898038469}}
+      },
+      "shelves": {
+        "left": {"name": "shelf_L69", "construction_template": {"ref": "levels[4].shelves.left"}}
+      }
+    },
+
+    {
+      "height": 5.0,
+      "type": "intermediate_right",
+      "description": "Right wall only, single sinusoid with simple back corner",
+
+      "base_geometry": {
+        "sinusoids": {
+          "right": {
+            "type": "vertical",
+            "wall": "W",
+            "x_base": {"ref": "pantry_width"},
+            "offset_from_wall": 5.0,
+            "y_start": 0,
+            "y_end": 29.0,
+            "period": {"ref": "design_params.sinusoid_period"},
+            "amplitude": {"ref": "design_params.sinusoid_amplitude"},
+            "phase_offset": 0.0
+          }
+        },
+
+        "arcs": {
+          "back_arc": {
+            "description": "Simple corner arc tangent to sinusoid and horizontal line",
+            "type": "tangent_circle",
+            "radius": {"ref": "design_params.interior_corner_radius"},
+            "tangent_to_sinusoid": "right",
+            "tangent_to_line": "horizontal",
+            "line_y": 29.0,
+            "solve_method": "tangent_horizontal_and_sinusoid"
+          },
+          "front_anchored_arc": {
+            "description": "Door smoothing arc using alt_9.py rotation method",
+            "type": "anchored_tangent_circle",
+            "radius": 5.0,
+            "anchor_point": [{"calc": "pantry_width - 2.5625 - 0.75 - 0.625"}, -0.75],
+            "tangent_to_sinusoid": "right",
+            "solve_method": "alt9_door_smoothing"
+          }
+        }
+      },
+
+      "shelves": {
+        "right": {
+          "wall": "W",
+          "name": "shelf_R5",
+          "construction": [
+            {
+              "step": 1,
+              "type": "point",
+              "description": "Start at wall/door corner",
+              "coords": [{"ref": "pantry_width"}, 0]
+            },
+            {
+              "step": 2,
+              "type": "straight_line",
+              "description": "Wall edge to back corner",
+              "to": [{"ref": "pantry_width"}, 29.0]
+            },
+            {
+              "step": 3,
+              "type": "straight_line",
+              "description": "Back edge to arc horizontal tangent",
+              "to": [{"ref": "arcs.back_arc.tangent_point_on_horizontal.x"}, 29.0]
+            },
+            {
+              "step": 4,
+              "type": "arc_segment",
+              "description": "Back corner arc from horizontal to sinusoid",
+              "arc": {"ref": "arcs.back_arc"},
+              "from_tangent": "horizontal",
+              "to_tangent": "right"
+            },
+            {
+              "step": 5,
+              "type": "sinusoid_segment",
+              "description": "Right edge sinusoid to front arc",
+              "sinusoid": "right",
+              "from": {"ref": "arcs.back_arc.tangent_point_on_right.y"},
+              "to": {"ref": "arcs.front_anchored_arc.tangent_point_on_right.y"},
+              "direction": "decreasing_y"
+            },
+            {
+              "step": 6,
+              "type": "arc_segment",
+              "description": "Front door smoothing arc (counter-clockwise)",
+              "arc": {"ref": "arcs.front_anchored_arc"},
+              "from_tangent": "right",
+              "to_tangent": "anchor",
+              "direction": "counter_clockwise"
+            },
+            {
+              "step": 7,
+              "type": "straight_line",
+              "description": "Door moulding horizontal segment (5/8 inch)",
+              "to": [{"calc": "pantry_width - 2.5625 - 0.75 - 0.625 + 0.625"}, -0.75]
+            },
+            {
+              "step": 8,
+              "type": "arc",
+              "description": "Door moulding corner arc (0.75 inch radius, 90 degrees)",
+              "center": [{"calc": "pantry_width - 2.5625"}, -0.75],
+              "radius": 0.75,
+              "start_angle": 180,
+              "end_angle": 90
+            },
+            {
+              "step": 9,
+              "type": "straight_line",
+              "description": "Close path back to start",
+              "to": [{"ref": "pantry_width"}, 0],
+              "close_path": true
+            }
+          ]
+        }
+      }
+    },
+
+    {
+      "height": 13.0,
+      "type": "intermediate_right",
+      "description": "Right wall only",
+      "base_geometry": {"sinusoids": {"right": {"phase_offset": 0.7853981633974483}}},
+      "shelves": {"right": {"name": "shelf_R13", "construction_template": {"ref": "levels[8].shelves.right"}}}
+    },
+
+    {
+      "height": 26.0,
+      "type": "intermediate_right",
+      "description": "Right wall only",
+      "base_geometry": {"sinusoids": {"right": {"phase_offset": 1.5707963267948966}}},
+      "shelves": {"right": {"name": "shelf_R26", "construction_template": {"ref": "levels[8].shelves.right"}}}
+    },
+
+    {
+      "height": 33.0,
+      "type": "intermediate_right",
+      "description": "Right wall only",
+      "base_geometry": {"sinusoids": {"right": {"phase_offset": 2.356194490192345}}},
+      "shelves": {"right": {"name": "shelf_R33", "construction_template": {"ref": "levels[8].shelves.right"}}}
+    },
+
+    {
+      "height": 46.0,
+      "type": "intermediate_right",
+      "description": "Right wall only",
+      "base_geometry": {"sinusoids": {"right": {"phase_offset": 3.141592653589793}}},
+      "shelves": {"right": {"name": "shelf_R46", "construction_template": {"ref": "levels[8].shelves.right"}}}
+    },
+
+    {
+      "height": 53.0,
+      "type": "intermediate_right",
+      "description": "Right wall only",
+      "base_geometry": {"sinusoids": {"right": {"phase_offset": 3.9269908169872414}}},
+      "shelves": {"right": {"name": "shelf_R53", "construction_template": {"ref": "levels[8].shelves.right"}}}
+    },
+
+    {
+      "height": 66.0,
+      "type": "intermediate_right",
+      "description": "Right wall only",
+      "base_geometry": {"sinusoids": {"right": {"phase_offset": 4.71238898038469}}},
+      "shelves": {"right": {"name": "shelf_R66", "construction_template": {"ref": "levels[8].shelves.right"}}}
+    },
+
+    {
+      "height": 73.0,
+      "type": "intermediate_right",
+      "description": "Right wall only",
+      "base_geometry": {"sinusoids": {"right": {"phase_offset": 5.497787143782138}}},
+      "shelves": {"right": {"name": "shelf_R73", "construction_template": {"ref": "levels[8].shelves.right"}}}
+    },
+
+    {
+      "height": 86.0,
+      "type": "intermediate_right",
+      "description": "Right wall only",
+      "base_geometry": {"sinusoids": {"right": {"phase_offset": 0.0}}},
+      "shelves": {"right": {"name": "shelf_R86", "construction_template": {"ref": "levels[8].shelves.right"}}}
+    }
+  ],
+
+  "_schema_notes": {
+    "reference_syntax": "Use {\"ref\": \"path.to.value\"} to reference other values in the config",
+    "calculation_syntax": "Use {\"calc\": \"expression\"} for simple arithmetic using referenced values",
+    "construction_steps": "Each shelf construction is a sequence of geometric primitives",
+    "primitive_types": [
+      "point - explicit coordinate",
+      "straight_line - line segment to a point",
+      "sinusoid_segment - portion of a sinusoid curve",
+      "arc - circular arc with center, radius, angles",
+      "arc_segment - portion of a pre-computed tangent arc"
+    ],
+    "solve_methods": [
+      "two_sinusoid_intersection - find where two sinusoids meet",
+      "slope_matching_two_sinusoids - tangent circle at sinusoid intersection",
+      "tangent_horizontal_and_sinusoid - tangent circle to horizontal line and sinusoid",
+      "tangent_horizontal_line_and_sinusoid - door smoothing with fixed anchor point"
+    ]
+  }
+}

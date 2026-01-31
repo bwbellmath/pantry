@@ -58,23 +58,35 @@ Complete shelves spanning all three walls:
 
 ## Complete Workflow (CURRENT - January 2026)
 
-### 1. Generate Exact Geometry & SVG Files
+### 1. Generate Exact Geometry & SVG Files (NEW: Construction-Based)
 ```bash
-python scripts/extract_and_export_geometry.py
+python scripts/generate_from_patterns.py
 ```
 
 **Outputs:**
-- `output/shelf_L*.svg`, `output/shelf_B*.svg`, `output/shelf_R*.svg` - 25 exact SVG files
-- `output/exact_cutting_templates.pdf` - Complete PDF with:
-  - Height-level visualization pages (17 pages)
-  - Life-size plywood layout pages (5 sheets, 150 DPI)
+- `output/shelf_*.svg` - 25 exact SVG cutting templates
+- `output/shelf_*.dxf` - 25 DXF CAD files for laser cutters/CNC
+- `output/pantry_layout.pdf` - **NEW!** Assembly guide with:
+  - 17 pages (one per shelf level)
+  - Color-coded shelves (blue=left, red=right, green=back)
+  - Shelves shown in correct anchored positions
+  - Dimension annotations and wall labels
+
+**Legacy Script (still available):**
+```bash
+python scripts/extract_and_export_geometry.py
+```
+- Uses procedural approach instead of JSON patterns
+- Outputs same files with `_exact` suffix
 
 **What it does:**
-- Loads config from `configs/pantry_0002.json`
-- Solves tangent circle geometry for all back corners
-- Handles special case: B59 right arc direction (auto-detected)
+- Loads construction patterns from `configs/shelf_level_patterns.json`
+- Computes base geometry per level (sinusoids, intersections, tangent arcs)
+- Executes construction sequences (points, lines, arcs, sinusoid segments)
+- Door smoothing using alt_9.py rotation-based solver
 - Generates exact polygon coordinates for each shelf
-- Packs all pieces onto 5 plywood sheets (96" × 48")
+- Creates assembly layout PDF with color-coded shelves
+- Exports SVG and DXF files for each piece
 
 ### 2. Generate Photorealistic 3D Renderings
 ```bash
@@ -162,11 +174,13 @@ python scripts/generate_kitchen_corner_shelves.py
 ```
 pantry/
 ├── README.md                      # This file
+├── CONSTRUCTION_PATTERNS.md       # Construction-based geometry guide
 ├── requirements.txt               # Python dependencies
 ├── configs/                       # JSON configuration files
-│   ├── pantry_0000.json          # Initial config
-│   ├── pantry_0002.json          # Current active config
-│   └── pantry_NNNN.json          # Additional variants
+│   ├── shelf_level_patterns.json # Construction-based geometry spec
+│   ├── pantry_0000.json          # Initial config (legacy)
+│   ├── pantry_0002.json          # Current active config (legacy)
+│   └── pantry_NNNN.json          # Additional variants (legacy)
 ├── src/                          # Core library modules
 │   ├── config.py                 # Configuration management
 │   ├── geometry.py               # Tangent circle solver, sinusoids
@@ -193,6 +207,123 @@ pantry/
 ```
 
 ---
+
+## Development Philosophy: Construction-Based Geometry
+
+### Overview
+
+This project follows a **construction-based development approach** where every shelf is completely specified as a sequence of geometric primitives in JSON configuration files. This approach separates the geometric specification from the rendering implementation, making the system data-driven and highly flexible.
+
+### Core Principles
+
+1. **JSON-Driven Geometry**: All shelf shapes are defined in JSON configuration files, not in procedural Python code
+2. **Base Geometry First**: For each height level, we compute shared geometric elements first (sinusoid intersections, tangent arcs, etc.)
+3. **Primitive Composition**: Each shelf is described as a closed path composed of:
+   - Points (explicit coordinates)
+   - Straight lines (between points)
+   - Sinusoid segments (portions of sinusoidal curves)
+   - Arc segments (circular arcs with specified properties)
+   - Solved arcs (arcs computed to be tangent to other curves)
+
+4. **Reference System**: Geometric elements can reference other elements (e.g., "arc midpoint from back_right_arc")
+5. **No Hard-Coded Dimensions**: All dimensions reference base parameters, ensuring changes propagate correctly
+
+### Construction Pattern: Main Shelf Levels
+
+For main shelf levels (with left, back, and right shelves), the construction follows this pattern:
+
+**Base Geometry:**
+```
+- 3 sinusoids: right, left, back (each with period, amplitude, phase_offset)
+- 2 intersections: back_right, back_left (where sinusoids meet)
+- 2 tangent arcs: back_right_arc, back_left_arc (slope-matching circles)
+- 2 arc midpoints: points that divide back shelf from left/right shelves
+```
+
+**Right Shelf Construction:**
+```
+1. Start at (pantry_width, 0)
+2. Straight line along door edge
+3. Door notch arc (concave quarter-circle)
+4. Straight line along extended door line
+5. Door smoothing arc (convex, tangent to sinusoid)
+6. Sinusoid segment (right edge) from smoothing to back arc
+7. Arc segment (back corner) from sinusoid to arc midpoint
+8. Straight line back to wall
+9. Straight line along wall (closes path)
+```
+
+**Back Shelf Construction:**
+```
+1. Start at back_left_arc_midpoint
+2. Arc segment from midpoint to back sinusoid
+3. Sinusoid segment along back edge
+4. Arc segment from back sinusoid to back_right_arc_midpoint
+5. Straight line closes path
+```
+
+### Configuration File: `shelf_level_patterns.json`
+
+The primary geometric specification is in `configs/shelf_level_patterns.json`. Key structure:
+
+```json
+{
+  "base_dimensions": { /* pantry size, door clearances */ },
+  "design_params": { /* sinusoid parameters, radii */ },
+  "levels": [
+    {
+      "height": 19.0,
+      "type": "main",
+      "base_geometry": {
+        "sinusoids": { /* right, left, back definitions */ },
+        "intersections": { /* computed intersection points */ },
+        "arcs": { /* tangent circle solutions */ },
+        "arc_midpoints": { /* dividing points */ }
+      },
+      "shelves": {
+        "right": { "construction": [ /* step-by-step primitives */ ] },
+        "left": { "construction": [ /* step-by-step primitives */ ] },
+        "back": { "construction": [ /* step-by-step primitives */ ] }
+      }
+    }
+  ]
+}
+```
+
+### Why This Approach?
+
+**Advantages:**
+- **Flexibility**: Modify base geometry without touching rendering code
+- **Maintainability**: Clear separation between geometric spec and implementation
+- **Reusability**: Construction templates can be reused across levels
+- **Transparency**: Complete geometric intent visible in JSON
+- **Validation**: Easy to verify geometric consistency
+- **Extensibility**: New primitive types can be added without breaking existing shelves
+
+**Example Workflow:**
+1. Modify a sinusoid amplitude in `base_dimensions`
+2. All dependent geometry (intersections, arcs, shelves) updates automatically
+3. Regenerate SVG/PDF with `python scripts/extract_and_export_geometry.py`
+4. No code changes required
+
+### Detailed Documentation
+
+For complete documentation of the construction-based approach, including:
+- Geometric primitive reference
+- Solver method specifications
+- Step-by-step examples
+- Adding new features
+
+See **[CONSTRUCTION_PATTERNS.md](CONSTRUCTION_PATTERNS.md)**
+
+### Future Development
+
+When adding new features:
+- **Add base geometry elements** in the `base_geometry` section
+- **Define new primitives** in the `construction` arrays
+- **Implement solvers** in `src/geometry.py` for new constraint types
+- **Update renderer** in scripts to interpret new primitive types
+- **Never hard-code** shelf-specific dimensions in Python code
 
 ## Technical Details
 
@@ -339,6 +470,13 @@ pip install numpy scipy matplotlib
 ## Recent Updates
 
 ### January 2026
+- ✅ **NEW: Pantry layout PDF** - Assembly guide showing all shelves in position with color coding (17 pages)
+- ✅ **NEW: Construction-based geometry system** - All shelves specified as sequences of geometric primitives in JSON
+- ✅ **NEW: alt_9.py door smoothing solver** - Rotation-based approach for precise tangent arc computation
+- ✅ Created `shelf_level_patterns.json` - Data-driven shelf configuration with base geometry and construction templates
+- ✅ Full pipeline implementation: parser → solver → renderer → exporter (SVG/DXF/PDF)
+- ✅ Template inheritance system for intermediate shelves (reduces JSON duplication)
+- ✅ Documented construction-based development philosophy in README
 - ✅ Fixed B59 back shelf arc direction anomaly
 - ✅ Updated right wall depth: 4" → 5"
 - ✅ Moved deprecated scripts to `scripts/old/`
