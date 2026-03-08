@@ -886,13 +886,18 @@ def tangent_circle_two_sinusoids_offset_intersection(
     r: float,
     quadrant: str,
     *,
+    period_v: Optional[float] = None,
+    period_h: Optional[float] = None,
     tol: float = 1e-12
 ) -> Dict[str, object]:
     """
     Find tangent circle to two sinusoids using Newton's method.
     
-    Horizontal sinusoid: y = y_pos + Ah * sin(x - x_off_h)
-    Vertical   sinusoid: x = x_pos + Av * sin(y - y_off_v)
+    Horizontal sinusoid: y = y_pos + Ah * sin(kx * (x - x_off_h))
+    Vertical   sinusoid: x = x_pos + Av * sin(ky * (y - y_off_v))
+
+    If period_h/period_v are provided, kx = 2π/period_h and
+    ky = 2π/period_v. If omitted, kx = ky = 1.0 (unit period 2π).
 
     Args:
         Av: Amplitude of vertical sinusoid
@@ -927,9 +932,12 @@ def tangent_circle_two_sinusoids_offset_intersection(
     sv = +1.0 if quadrant in {"tr", "br"} else -1.0
 
     # Horizontal curve point + unit normal
+    kx = 1.0 if period_h is None else (2.0 * math.pi / period_h)
+    ky = 1.0 if period_v is None else (2.0 * math.pi / period_v)
+
     def horiz_point_and_unit_normal(x: float):
-        y = y_pos + Ah * math.sin(x - x_off_h)
-        yp = Ah * math.cos(x - x_off_h)  # dy/dx
+        y = y_pos + Ah * math.sin(kx * (x - x_off_h))
+        yp = Ah * kx * math.cos(kx * (x - x_off_h))  # dy/dx
         # normal direction (-yp, 1)
         inv = 1.0 / math.sqrt(1.0 + yp * yp)
         nx, ny = (-yp * inv, 1.0 * inv)
@@ -937,8 +945,8 @@ def tangent_circle_two_sinusoids_offset_intersection(
 
     # Vertical curve point + unit normal
     def vert_point_and_unit_normal(y: float):
-        x = x_pos + Av * math.sin(y - y_off_v)
-        xp = Av * math.cos(y - y_off_v)  # dx/dy
+        x = x_pos + Av * math.sin(ky * (y - y_off_v))
+        xp = Av * ky * math.cos(ky * (y - y_off_v))  # dx/dy
         # normal direction (1, -xp)
         inv = 1.0 / math.sqrt(1.0 + xp * xp)
         mx, my = (1.0 * inv, -xp * inv)
@@ -1073,13 +1081,14 @@ def solve_tangent_circle_two_sinusoids_newton(
         x_pos = base_depth1
         Av = amplitude1
         # For phase: we want sin(2π*y/period - offset) = sin(2π/period * (y - offset*period/(2π)))
-        y_off_v = offset1 * period1 / (2 * math.pi)
+        # sin(k*y + phase) -> sin(k*(y - phase/k)), so y_off_v = -phase/k
+        y_off_v = -offset1 * period1 / (2 * math.pi)
         
         # Horizontal (back) sinusoid: y = (pantry_depth - base_depth2) - amplitude2 * sin(2π*x/period2 - offset2)
         # Note the negative sign! y = y_pos - amplitude * sin(...)
         y_pos = pantry_depth - base_depth2
         Ah = -amplitude2  # Negative!
-        x_off_h = offset2 * period2 / (2 * math.pi)
+        x_off_h = -offset2 * period2 / (2 * math.pi)
         
         # Quadrant: we want circle to right of left sinusoid (sv=+1) and below back sinusoid (sh=-1)
         quadrant = 'br'
@@ -1088,12 +1097,12 @@ def solve_tangent_circle_two_sinusoids_newton(
         # Vertical (right) sinusoid: x = (pantry_width - base_depth1) - amplitude1 * sin(2π*y/period1 - offset1)
         x_pos = pantry_width - base_depth1
         Av = -amplitude1  # Negative!
-        y_off_v = offset1 * period1 / (2 * math.pi)
+        y_off_v = -offset1 * period1 / (2 * math.pi)
         
         # Horizontal (back) sinusoid: same as left-back
         y_pos = pantry_depth - base_depth2
         Ah = -amplitude2
-        x_off_h = offset2 * period2 / (2 * math.pi)
+        x_off_h = -offset2 * period2 / (2 * math.pi)
         
         # Quadrant: we want circle to left of right sinusoid (sv=-1) and below back sinusoid (sh=-1)
         quadrant = 'bl'
@@ -1105,7 +1114,9 @@ def solve_tangent_circle_two_sinusoids_newton(
         Av=Av, x_pos=x_pos, y_off_v=y_off_v,
         Ah=Ah, y_pos=y_pos, x_off_h=x_off_h,
         r=radius,
-        quadrant=quadrant
+        quadrant=quadrant,
+        period_v=period1,
+        period_h=period2,
     )
     
     # Extract results and convert to numpy arrays

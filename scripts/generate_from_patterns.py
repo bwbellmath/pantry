@@ -651,6 +651,12 @@ class BaseGeometrySolver:
                 sin1_name = self.resolver.resolve(config['tangent_to'][0], context)
                 sin2_name = self.resolver.resolve(config['tangent_to'][1], context)
 
+                # Add sinusoid-named keys to result dict for arc_segment lookups
+                result[f'tangent_{sin1_name}_x'] = result['tangent_1_x']
+                result[f'tangent_{sin1_name}_y'] = result['tangent_1_y']
+                result[f'tangent_{sin2_name}_x'] = result['tangent_2_x']
+                result[f'tangent_{sin2_name}_y'] = result['tangent_2_y']
+
                 arcs[f'arc_{name}'] = result
                 arcs[f'arc_{name}_center_x'] = result['center_x']
                 arcs[f'arc_{name}_center_y'] = result['center_y']
@@ -932,8 +938,16 @@ class BaseGeometrySolver:
                 angle_1 = np.arctan2(t1_y - center_y, t1_x - center_x)
                 angle_2 = np.arctan2(t2_y - center_y, t2_x - center_x)
 
-                # Midpoint angle
-                angle_mid = (angle_1 + angle_2) / 2
+                # Calculate angular difference, normalized to [-π, π] (shorter arc)
+                # This ensures we get the midpoint on the interior arc, not the exterior
+                angle_diff = angle_2 - angle_1
+                while angle_diff > np.pi:
+                    angle_diff -= 2 * np.pi
+                while angle_diff < -np.pi:
+                    angle_diff += 2 * np.pi
+
+                # Midpoint angle: go half the angular distance from angle_1
+                angle_mid = angle_1 + angle_diff / 2
 
                 # Midpoint coordinates
                 mid_x = center_x + radius * np.cos(angle_mid)
@@ -1443,6 +1457,209 @@ class GeometryExporter:
 
 
 # ============================================================================
+# PIPE CUTOUT POST-PROCESSOR
+# ============================================================================
+
+def apply_pipe_cutout(polygon: np.ndarray, config: dict) -> np.ndarray:
+    """
+    Apply a D-shaped pipe cutout to the wall edge (x≈0) of a left shelf polygon.
+
+    Finds the wall-edge segment (a straight line along x=0 spanning the cutout range)
+    and replaces it with a D-shaped indentation.
+
+    Args:
+        polygon: Array of [x, y] vertices forming closed polygon
+        config: Full JSON config containing design_params.pipe_cutout
+
+    Returns:
+        Modified polygon with D-shaped cutout
+    """
+    cutout_cfg = config.get('design_params', {}).get('pipe_cutout')
+    if cutout_cfg is None:
+        return polygon
+
+    cx, cy = cutout_cfg['center']
+    radius = cutout_cfg['pipe_diameter'] / 2.0 + cutout_cfg['clearance']
+    y_bottom = cy - radius  # 2.625
+    y_top = cy + radius     # 6.375
+
+    wall_tol = 0.01
+    n = len(polygon)
+
+    # Find the wall-edge segment: two consecutive vertices both at x≈0 whose
+    # y-span covers [y_bottom, y_top]. This is the straight wall edge, not the
+    # door corner vertex.
+    seg_idx = None
+    for i in range(n):
+        j = (i + 1) % n
+        x_i, y_i = polygon[i]
+        x_j, y_j = polygon[j]
+        if abs(x_i) < wall_tol and abs(x_j) < wall_tol:
+            seg_y_min = min(y_i, y_j)
+            seg_y_max = max(y_i, y_j)
+            if seg_y_min <= y_bottom and seg_y_max >= y_top:
+                seg_idx = i
+                break
+
+    if seg_idx is None:
+        return polygon
+
+    i = seg_idx
+    j = (i + 1) % n
+    y_i = polygon[i][1]
+    y_j = polygon[j][1]
+    wall_going_up = y_i < y_j  # Does the segment go from low y to high y?
+
+    # Generate the semicircle arc points (right semicircle from bottom to top)
+    n_arc = 20
+    arc_points = []
+    for k in range(n_arc + 1):
+        angle = -np.pi / 2 + np.pi * k / n_arc
+        ax = cx + radius * np.cos(angle)
+        ay = cy + radius * np.sin(angle)
+        arc_points.append([ax, ay])
+
+    # Build cutout vertices matching traversal direction
+    if wall_going_up:
+        # Segment goes bottom→top, cutout: (0,y_bottom)→arc→(0,y_top)
+        cutout = [[0, y_bottom]] + arc_points + [[0, y_top]]
+    else:
+        # Segment goes top→bottom, cutout: (0,y_top)→arc_reversed→(0,y_bottom)
+        cutout = [[0, y_top]] + arc_points[::-1] + [[0, y_bottom]]
+
+    # Build new polygon: keep vertex i, insert cutout, then vertex j onward
+    # The cutout replaces the straight segment from i to j
+    new_vertices = []
+
+    # Add all vertices from 0 to i (inclusive)
+    for k in range(i + 1):
+        new_vertices.append(polygon[k].tolist())
+
+    # Insert cutout
+    new_vertices.extend(cutout)
+
+    # Add remaining vertices from j onward
+    for k in range(j, n):
+        new_vertices.append(polygon[k].tolist())
+
+    return np.array(new_vertices)
+
+
+def apply_outlet_cutout(polygon: np.ndarray, config: dict, height: float) -> np.ndarray:
+    """
+    Apply a rectangular cutout with chamfered corners on the right wall edge (x≈48)
+    for outlet clearance on back shelves.
+
+    The cutout is a 4"-deep rectangular notch with 2" radius quarter-circle chamfers
+    on the two interior corners.
+
+    Args:
+        polygon: Array of [x, y] vertices forming closed polygon
+        config: Full JSON config containing design_params.outlet_cutout
+        height: Shelf height in inches from floor
+
+    Returns:
+        Modified polygon with outlet cutout, or original if not affected
+    """
+    outlet_cfg = config.get('design_params', {}).get('outlet_cutout')
+    if outlet_cfg is None:
+        return polygon
+
+    # Check if this shelf height intersects the outlet height range
+    shelf_thickness = config.get('design_params', {}).get('shelf_thickness', 1.0)
+    h_lo, h_hi = outlet_cfg['height_range']
+    if height + shelf_thickness <= h_lo or height >= h_hi:
+        return polygon
+
+    # Compute cutout y-range (with clearance)
+    pantry_depth = config['base_dimensions']['pantry_depth']
+    clearance = outlet_cfg['clearance']
+    from_back_near, from_back_far = outlet_cfg['from_back_wall']
+    y_top = pantry_depth - from_back_near + clearance    # closer to back wall
+    y_bottom = pantry_depth - from_back_far - clearance  # closer to door
+
+    wall_x = config['base_dimensions']['pantry_width']  # 48
+    depth = outlet_cfg['depth']
+    chamfer_r = outlet_cfg['chamfer_radius']
+    inner_x = wall_x - depth  # 44
+
+    wall_tol = 0.01
+    n = len(polygon)
+
+    # Find the wall-edge segment at x≈wall_x that spans the cutout y-range
+    seg_idx = None
+    for i in range(n):
+        j = (i + 1) % n
+        x_i, y_i = polygon[i]
+        x_j, y_j = polygon[j]
+        if abs(x_i - wall_x) < wall_tol and abs(x_j - wall_x) < wall_tol:
+            seg_y_min = min(y_i, y_j)
+            seg_y_max = max(y_i, y_j)
+            if seg_y_min <= y_bottom and seg_y_max >= y_top:
+                seg_idx = i
+                break
+
+    if seg_idx is None:
+        return polygon
+
+    i = seg_idx
+    j = (i + 1) % n
+    wall_going_up = polygon[i][1] < polygon[j][1]
+
+    # Generate chamfer arcs (quarter circles, 10 points each)
+    n_arc = 10
+
+    # Top chamfer: corner at (inner_x, y_top), center at (inner_x + chamfer_r, y_top - chamfer_r)
+    top_arc_cx = inner_x + chamfer_r
+    top_arc_cy = y_top - chamfer_r
+    top_arc = []
+    for k in range(n_arc + 1):
+        angle = np.pi / 2 + (np.pi / 2) * k / n_arc  # 90° to 180°
+        ax = top_arc_cx + chamfer_r * np.cos(angle)
+        ay = top_arc_cy + chamfer_r * np.sin(angle)
+        top_arc.append([ax, ay])
+
+    # Bottom chamfer: corner at (inner_x, y_bottom), center at (inner_x + chamfer_r, y_bottom + chamfer_r)
+    bot_arc_cx = inner_x + chamfer_r
+    bot_arc_cy = y_bottom + chamfer_r
+    bot_arc = []
+    for k in range(n_arc + 1):
+        angle = np.pi + (np.pi / 2) * k / n_arc  # 180° to 270°
+        ax = bot_arc_cx + chamfer_r * np.cos(angle)
+        ay = bot_arc_cy + chamfer_r * np.sin(angle)
+        bot_arc.append([ax, ay])
+
+    # Build cutout path (top-to-bottom traversal, matching wall going down)
+    # Wall → (wall_x, y_top) → (inner_x+r, y_top) → top_arc → (inner_x, y_top-r)
+    #   → (inner_x, y_bottom+r) → bot_arc → (inner_x+r, y_bottom) → (wall_x, y_bottom) → wall
+    # top_arc starts at (top_arc_cx, y_top), bot_arc ends at (bot_arc_cx, y_bottom)
+    # so we skip the duplicate connecting points
+    cutout_down = (
+        [[wall_x, y_top]] +
+        top_arc +                # includes (chamfer_cx, y_top) start point
+        bot_arc +                # includes inner edge connection
+        [[wall_x, y_bottom]]    # horizontal back to wall
+    )
+
+    if wall_going_up:
+        cutout = cutout_down[::-1]
+    else:
+        cutout = cutout_down
+
+    # Build new polygon: keep vertex i, insert cutout, then vertex j onward
+    new_vertices = []
+    for k in range(i + 1):
+        new_vertices.append(polygon[k].tolist())
+
+    new_vertices.extend(cutout)
+
+    for k in range(j, n):
+        new_vertices.append(polygon[k].tolist())
+
+    return np.array(new_vertices)
+
+
+# ============================================================================
 # MAIN PIPELINE
 # ============================================================================
 
@@ -1535,6 +1752,15 @@ def main():
             try:
                 # Render polygon
                 polygon = renderer.render_shelf(construction, context)
+
+                # Apply pipe cutout for left shelves
+                if shelf_wall in ['left', 'E']:
+                    polygon = apply_pipe_cutout(polygon, config)
+
+                # Apply outlet cutout for back shelves on the right wall
+                if shelf_wall in ['back', 'S']:
+                    polygon = apply_outlet_cutout(polygon, config, height)
+
                 print(f"    Generated polygon with {len(polygon)} vertices")
 
                 # Export

@@ -18,7 +18,21 @@
     "door_corner_radius": 3.0,
     "door_extension": 0.75,
     "door_notch_radius": 0.75,
-    "door_smoothing_min_radius": 5.0
+    "door_smoothing_min_radius": 5.0,
+    "pipe_cutout": {
+      "center": [3.75, 4.5],
+      "pipe_diameter": 3.5,
+      "clearance": 0.125,
+      "wall": "E"
+    },
+    "outlet_cutout": {
+      "from_back_wall": [4.75, 10.25],
+      "clearance": 0.5,
+      "height_range": [39, 46],
+      "depth": 4.0,
+      "chamfer_radius": 2.0,
+      "wall": "W"
+    }
   },
 
   "levels": [
@@ -33,7 +47,7 @@
             "type": "vertical",
             "wall": "W",
             "x_base": {"ref": "pantry_width"},
-            "offset_from_wall": 5.0,
+            "offset_from_wall": 6.0,
             "y_start": 0,
             "y_end": {"ref": "pantry_depth"},
             "period": {"ref": "design_params.sinusoid_period"},
@@ -549,7 +563,7 @@
             "type": "vertical",
             "wall": "W",
             "x_base": {"ref": "pantry_width"},
-            "offset_from_wall": 5.0,
+            "offset_from_wall": 6.0,
             "y_start": 0,
             "y_end": 29.0,
             "period": {"ref": "design_params.sinusoid_period"},

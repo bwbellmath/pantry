@@ -1,0 +1,61 @@
+{
+  "description": "Stud center positions and bracket configurations for mounting brackets.",
+  "notes": [
+    "All measurements in inches",
+    "Brackets will be centered on stud positions",
+    "tongue_length is the stem that extends into the shelf (for router inset)",
+    "Standard 2x4 stud is 1.5\" wide"
+  ],
+
+  "bracket_base_width": 3.2,
+  "bracket_base_height": 0.2,
+  "bracket_stem_width": 1.6,
+
+  "right_wall": {
+    "description": "Right/West wall (x=48), studs listed by Y-position from door",
+    "wall_x": 48.0,
+    "tongue_length": 4.0,
+    "stud_centers_y": [
+      5.175,
+      16.675,
+      25.825
+    ]
+  },
+
+  "left_wall": {
+    "description": "Left/East wall (x=0), studs listed by Y-position from door",
+    "wall_x": 0.0,
+    "tongue_length": 6.0,
+    "stud_centers_y": [
+      7.55,
+      22.0
+    ]
+  },
+
+  "back_wall": {
+    "description": "Back/South wall (y=49), studs listed by X-position from left corner, shifted +1.8 right",
+    "wall_y": 49.0,
+    "tongue_length": 10.0,
+    "stud_centers_x": [
+      7.175,
+      22.8,
+      39.05
+    ]
+  },
+
+  "back_shelf_side_brackets": {
+    "description": "Side support brackets for back shelves, mounted to left/right walls",
+    "enabled": true,
+    "tongue_length": 10.0,
+    "y_position": 36.2,
+    "note": "y_position is 12.8 inches from back wall (49 - 12.8 = 36.2), shifted 1.8 forward to avoid back wall brackets"
+  },
+
+  "back_shelf_corner_brackets": {
+    "description": "Corner brackets for back shelves, screwed into hidden corner studs for extra stability",
+    "enabled": true,
+    "tongue_length": 4.0,
+    "left_corner": {"x": 0.0, "y": 47.4},
+    "right_corner": {"x": 48.0, "y": 47.4}
+  }
+}
