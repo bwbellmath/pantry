@@ -1284,10 +1284,11 @@ class ConstructionRenderer:
 class GeometryExporter:
     """Exports shelf geometry to various formats."""
 
-    def __init__(self, output_dir: Path):
+    def __init__(self, output_dir: Path, pantry_width: float = 48.0):
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.level_data = []  # Store data for layout PDF
+        self.pantry_width = pantry_width  # used to mirror DXF for bottom-face machining
 
     def export_svg(self, name: str, polygon: np.ndarray, width: float, height: float):
         """Export polygon to SVG file."""
@@ -1319,8 +1320,12 @@ class GeometryExporter:
         doc.units = units.IN  # Inches
         msp = doc.modelspace()
 
-        # Add polyline
-        points = [(p[0], p[1], 0) for p in polygon]
+        # Add polyline — mirror X so CNC machines the bottom face correctly.
+        # When the shelf is flipped face-down for machining the bracket pockets,
+        # the left/right axis is reversed. Reflecting X about pantry_width/2
+        # (i.e. X → pantry_width - X) compensates so that after flipping the
+        # physical board the geometry lands in the correct pantry position.
+        points = [(self.pantry_width - p[0], p[1], 0) for p in polygon]
         msp.add_lwpolyline(points, close=True)
 
         # Save
@@ -1679,7 +1684,9 @@ def main():
     resolver = ReferenceResolver(config)
     base_solver = BaseGeometrySolver(resolver)
     renderer = ConstructionRenderer(resolver)
-    exporter = GeometryExporter(Path(__file__).parent.parent / 'output')
+    _pantry_width = resolver.resolve({'ref': 'base_dimensions.pantry_width'}, {})
+    exporter = GeometryExporter(Path(__file__).parent.parent / 'output',
+                                pantry_width=_pantry_width)
 
     # Process each level
     base_level_configs = {}  # Store base configs by type

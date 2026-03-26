@@ -20,28 +20,108 @@ from matplotlib.patches import Polygon, Patch
 # BRACKET GEOMETRY FUNCTIONS
 # =============================================================================
 
-def create_bracket_outline(base_width, base_height, stem_width, tongue_length):
+def create_bracket_outline(base_width, base_height, stem_width, tongue_length,
+                            dogbone_radius=None, base_corner_radius=None, n_arc_pts=32):
     """
-    Create bracket outline points for given dimensions.
+    Create bracket outline points (the negative pocket shape cut into the shelf).
 
-    Returns numpy array of points forming the T-shaped bracket.
+    Wall-side outer corners at [0, base_height] and [base_width, base_height]:
+      These are convex exterior corners of the pocket. We add an intentional 0.5"
+      radius so the geometry is well-defined rather than relying on tool runout.
+      Circle centers sit below y=0 at (0, base_height - r) and (base_width, base_height - r).
+      Each arc is CCW ~53° connecting the outer wall to the bottom edge.
+
+        LEFT  corner center: (0,          base_height - r_wc)
+          arc entry:  (0,                base_height)    coming from base top
+          arc exit:   (-chord_half,      0)              joining bottom edge
+
+        RIGHT corner center: (base_width, base_height - r_wc)
+          arc entry:  (base_width+chord_half, 0)         coming from bottom edge
+          arc exit:   (base_width,        base_height)   joining base top
+
+      where chord_half = sqrt(r_wc^2 - (r_wc - base_height)^2)
+
+    Armpit corners at [stem_right, base_height] and [stem_left, base_height]:
+      These are inside corners of the pocket — the end mill leaves material behind
+      here naturally. The bracket has convex corners there, so they fit fine. SHARP.
+
+    Tongue tip corners at [stem_right, total_height] and [stem_left, total_height]:
+      Inside corners of the pocket; bracket has sharp outside corners that must seat
+      fully. Requires dogbone relief (180° CCW arc, minimum excursion).
+
+    # OLD (incorrect): armpit fillets (wrong corners were rounded).
+    # OLD simple: 9-point T-shape, no arcs anywhere.
     """
-    # Stem is centered on the base
-    stem_left = (base_width - stem_width) / 2
+    if dogbone_radius is None:
+        dogbone_radius = DOGBONE_RADIUS
+    if base_corner_radius is None:
+        base_corner_radius = BASE_CORNER_RADIUS
+
+    stem_left  = (base_width - stem_width) / 2
     stem_right = (base_width + stem_width) / 2
     total_height = base_height + tongue_length
 
-    return np.array([
-        [0.0, 0.0],
-        [base_width, 0.0],
-        [base_width, base_height],
-        [stem_right, base_height],
-        [stem_right, total_height],
-        [stem_left, total_height],
-        [stem_left, base_height],
-        [0.0, base_height],
-        [0.0, 0.0],
+    # --- Tongue tip dogbones ---
+    R  = dogbone_radius
+    d  = R / np.sqrt(2)
+    Rd = R * np.sqrt(2)
+
+    cr = np.array([stem_right - d, total_height - d])
+    arc_r = np.array([
+        [cr[0] + R * np.cos(a), cr[1] + R * np.sin(a)]
+        for a in np.linspace(np.radians(-45), np.radians(135), n_arc_pts + 1)
     ])
+    # arc_r[0]  = (stem_right,      total_height - Rd)  [right wall]
+    # arc_r[-1] = (stem_right - Rd, total_height)       [back wall]
+
+    cl = np.array([stem_left + d, total_height - d])
+    arc_l = np.array([
+        [cl[0] + R * np.cos(a), cl[1] + R * np.sin(a)]
+        for a in np.linspace(np.radians(45), np.radians(225), n_arc_pts + 1)
+    ])
+    # arc_l[0]  = (stem_left + Rd, total_height)        [back wall]
+    # arc_l[-1] = (stem_left,      total_height - Rd)   [left wall]
+
+    # --- Wall-side outer corner arcs ---
+    r_wc = base_corner_radius                     # 0.5"
+    wcy  = base_height - r_wc                     # center y = -0.3" (below base)
+    chord_half = np.sqrt(r_wc**2 - wcy**2)        # x-distance from center to y=0 crossing
+
+    # RIGHT wall corner: CCW from (base_width+chord_half, 0) to (base_width, base_height)
+    cwc_r = np.array([base_width, wcy])
+    arc_wc_r = np.array([
+        [cwc_r[0] + r_wc * np.cos(a), cwc_r[1] + r_wc * np.sin(a)]
+        for a in np.linspace(np.arctan2(-wcy, chord_half), np.pi / 2,
+                             n_arc_pts // 4 + 1)
+    ])
+    # arc_wc_r[0]  = (base_width + chord_half, 0)
+    # arc_wc_r[-1] = (base_width, base_height)
+
+    # LEFT wall corner: CCW from (0, base_height) to (-chord_half, 0)
+    cwc_l = np.array([0.0, wcy])
+    arc_wc_l = np.array([
+        [cwc_l[0] + r_wc * np.cos(a), cwc_l[1] + r_wc * np.sin(a)]
+        for a in np.linspace(np.pi / 2, np.arctan2(-wcy, -chord_half),
+                             n_arc_pts // 4 + 1)
+    ])
+    # arc_wc_l[0]  = (0, base_height)
+    # arc_wc_l[-1] = (-chord_half, 0)
+
+    pts = []
+    pts.extend(arc_wc_r.tolist())  # bottom edge → right outer corner → base top
+    # arc_wc_r[-1] = (base_width, base_height); implicit line to right armpit:
+    pts.append([stem_right, base_height])   # RIGHT ARMPIT — sharp
+    # implicit straight up right wall to arc_r[0]:
+    pts.extend(arc_r.tolist())              # right tip dogbone
+    # implicit straight along back wall: arc_r[-1] to arc_l[0]
+    pts.extend(arc_l.tolist())             # left tip dogbone
+    # implicit straight down left wall to arc_la[0]:
+    pts.append([stem_left, base_height])    # LEFT ARMPIT — sharp
+    # implicit straight along base top to arc_wc_l[0]:
+    pts.extend(arc_wc_l.tolist())          # base top → left outer corner → bottom edge
+    # arc_wc_l[-1] = (-chord_half, 0); close with bottom edge back to arc_wc_r[0]:
+    pts.append([base_width + chord_half, 0.0])
+    return np.array(pts)
 
 def create_bracket_cut_line(base_width, base_height, stem_width):
     """
@@ -54,28 +134,23 @@ def create_bracket_cut_line(base_width, base_height, stem_width):
         [stem_right, base_height],
     ])
 
-# Dogbone relief circles at the two tip corners of the tongue.
-# Diameter 0.5" gives clearance for a 3/8" end mill (tool radius 3/16").
-DOGBONE_RADIUS = 0.25  # inches (1/2" diameter)
+# Dogbone relief at tongue tip corners: 0.5" diameter for a 3/8" end mill.
+DOGBONE_RADIUS = 0.25  # inches (radius; diameter = 0.5")
+# Fillet radius at armpit corners (base meets tongue): must be ≥ tool radius (3/16").
+BASE_CORNER_RADIUS = 0.5  # inches
 
-def create_bracket_dogbone_centers(base_width, base_height, stem_width, tongue_length):
+def mirror_x_pts(pts, width):
+    """Mirror points about X = width/2 (reflect left↔right).
+
+    Applied to bracket pockets in the combined DXF so that when the shelf is
+    placed face-down on the CNC table (to machine the bottom), the pockets land
+    in the correct pantry position after the board is flipped back face-up.
+    The individual shelf outline DXFs are already mirrored by generate_from_patterns.py.
     """
-    Return the two dogbone relief circle centers at the tip corners of the bracket tongue.
+    m = pts.copy()
+    m[:, 0] = width - m[:, 0]
+    return m
 
-    In local (pre-rotation) coordinates:
-      - [stem_left,  base_height + tongue_length]  (left tip corner)
-      - [stem_right, base_height + tongue_length]  (right tip corner)
-
-    These are the inside corners at the FAR END of the tongue where a square-cornered
-    bracket cannot seat without relief. The base/armpit corners are NOT included here.
-    """
-    stem_left = (base_width - stem_width) / 2
-    stem_right = (base_width + stem_width) / 2
-    total_height = base_height + tongue_length
-    return np.array([
-        [stem_left,  total_height],
-        [stem_right, total_height],
-    ])
 
 def rotate_points(points, angle_deg):
     """Rotate points around origin by angle in degrees."""
@@ -94,10 +169,8 @@ def place_bracket(stud_center_x, stud_center_y, wall_side, config):
 
     wall_side: 'left', 'right', 'back', 'back_left_support', 'back_right_support',
               'corner_left', 'corner_right'
-    Returns: (outline_points, cut_line_points, dogbone_centers)
-      dogbone_centers: 2x2 array of [x, y] circle centers for 0.5"-diameter relief
-                       holes at the two inside corners of the tongue tip.
-    # OLD return was: (outline_points, cut_line_points)
+    Returns: (outline_points, cut_line_points)
+      outline_points includes dogbone relief geometry at the tongue tip corners.
     """
     base_width = config['bracket_base_width']
     base_height = config['bracket_base_height']
@@ -119,61 +192,51 @@ def place_bracket(stud_center_x, stud_center_y, wall_side, config):
 
     outline = create_bracket_outline(base_width, base_height, stem_width, tongue_length)
     cut_line = create_bracket_cut_line(base_width, base_height, stem_width)
-    dogbone_centers = create_bracket_dogbone_centers(base_width, base_height, stem_width, tongue_length)
 
     # Center bracket on origin
     outline[:, 0] -= base_width / 2
     cut_line[:, 0] -= base_width / 2
-    dogbone_centers[:, 0] -= base_width / 2
 
     if wall_side == 'right':
         # Rotate 90° CCW so stem points left (into pantry)
         outline = rotate_points(outline, 90)
         cut_line = rotate_points(cut_line, 90)
-        dogbone_centers = rotate_points(dogbone_centers, 90)
 
     elif wall_side == 'left':
         # Rotate 90° CW so stem points right (into pantry)
         outline = rotate_points(outline, -90)
         cut_line = rotate_points(cut_line, -90)
-        dogbone_centers = rotate_points(dogbone_centers, -90)
 
     elif wall_side == 'back':
         # Rotate 180° so stem points down (into pantry)
         outline = rotate_points(outline, 180)
         cut_line = rotate_points(cut_line, 180)
-        dogbone_centers = rotate_points(dogbone_centers, 180)
 
     elif wall_side == 'back_left_support':
         # Mounted to left wall, stem points right (into back shelf)
         outline = rotate_points(outline, -90)
         cut_line = rotate_points(cut_line, -90)
-        dogbone_centers = rotate_points(dogbone_centers, -90)
 
     elif wall_side == 'back_right_support':
         # Mounted to right wall, stem points left (into back shelf)
         outline = rotate_points(outline, 90)
         cut_line = rotate_points(cut_line, 90)
-        dogbone_centers = rotate_points(dogbone_centers, 90)
 
     elif wall_side == 'corner_left':
         # Back-left corner, stem points right (into back shelf)
         outline = rotate_points(outline, -90)
         cut_line = rotate_points(cut_line, -90)
-        dogbone_centers = rotate_points(dogbone_centers, -90)
 
     elif wall_side == 'corner_right':
         # Back-right corner, stem points left (into back shelf)
         outline = rotate_points(outline, 90)
         cut_line = rotate_points(cut_line, 90)
-        dogbone_centers = rotate_points(dogbone_centers, 90)
 
     # Translate to position
     outline = translate_points(outline, stud_center_x, stud_center_y)
     cut_line = translate_points(cut_line, stud_center_x, stud_center_y)
-    dogbone_centers = translate_points(dogbone_centers, stud_center_x, stud_center_y)
 
-    return outline, cut_line, dogbone_centers
+    return outline, cut_line
 
 
 def main():
@@ -283,63 +346,59 @@ def main():
             if wall_side == 'left':
                 wall_x = config['left_wall']['wall_x']
                 for stud_y in config['left_wall']['stud_centers_y']:
-                    outline, cut_line, dogbone_centers = place_bracket(wall_x, stud_y, 'left', config)  # was: outline, cut_line
+                    outline, cut_line = place_bracket(wall_x, stud_y, 'left', config)
                     # Store for PDF (without DXF offset)
                     all_brackets[height].append({
                         'outline': outline.copy(),
                         'wall': 'left'
                     })
-                    # Apply DXF offset
+                    # Mirror bracket X for bottom-face machining, then apply layout offset
+                    outline = mirror_x_pts(outline, PANTRY_WIDTH)
+                    cut_line = mirror_x_pts(cut_line, PANTRY_WIDTH)
                     outline = translate_points(outline, x_offset, y_offset)
                     cut_line = translate_points(cut_line, x_offset, y_offset)
-                    dogbone_centers_dxf = translate_points(dogbone_centers.copy(), x_offset, y_offset)
                     msp.add_lwpolyline([(p[0], p[1]) for p in outline], close=True,
                                        dxfattribs={'layer': 'BRACKET_OUTLINE', 'color': 6})
                     msp.add_line((cut_line[0][0], cut_line[0][1]), (cut_line[1][0], cut_line[1][1]),
                                 dxfattribs={'layer': 'BRACKET_CUT_LINE', 'color': 4})
-                    for dc in dogbone_centers_dxf:
-                        msp.add_circle((dc[0], dc[1]), DOGBONE_RADIUS,
-                                       dxfattribs={'layer': 'BRACKET_DOGBONE', 'color': 2})
                     shelf_brackets += 1
 
             elif wall_side == 'right':
                 wall_x = config['right_wall']['wall_x']
                 for stud_y in config['right_wall']['stud_centers_y']:
-                    outline, cut_line, dogbone_centers = place_bracket(wall_x, stud_y, 'right', config)  # was: outline, cut_line
+                    outline, cut_line = place_bracket(wall_x, stud_y, 'right', config)
                     all_brackets[height].append({
                         'outline': outline.copy(),
                         'wall': 'right'
                     })
+                    # Mirror bracket X for bottom-face machining, then apply layout offset
+                    outline = mirror_x_pts(outline, PANTRY_WIDTH)
+                    cut_line = mirror_x_pts(cut_line, PANTRY_WIDTH)
                     outline = translate_points(outline, x_offset, y_offset)
                     cut_line = translate_points(cut_line, x_offset, y_offset)
-                    dogbone_centers_dxf = translate_points(dogbone_centers.copy(), x_offset, y_offset)
                     msp.add_lwpolyline([(p[0], p[1]) for p in outline], close=True,
                                        dxfattribs={'layer': 'BRACKET_OUTLINE', 'color': 6})
                     msp.add_line((cut_line[0][0], cut_line[0][1]), (cut_line[1][0], cut_line[1][1]),
                                 dxfattribs={'layer': 'BRACKET_CUT_LINE', 'color': 4})
-                    for dc in dogbone_centers_dxf:
-                        msp.add_circle((dc[0], dc[1]), DOGBONE_RADIUS,
-                                       dxfattribs={'layer': 'BRACKET_DOGBONE', 'color': 2})
                     shelf_brackets += 1
 
             elif wall_side == 'back':
                 wall_y = config['back_wall']['wall_y']
                 for stud_x in config['back_wall']['stud_centers_x']:
-                    outline, cut_line, dogbone_centers = place_bracket(stud_x, wall_y, 'back', config)  # was: outline, cut_line
+                    outline, cut_line = place_bracket(stud_x, wall_y, 'back', config)
                     all_brackets[height].append({
                         'outline': outline.copy(),
                         'wall': 'back'
                     })
+                    # Mirror bracket X for bottom-face machining, then apply layout offset
+                    outline = mirror_x_pts(outline, PANTRY_WIDTH)
+                    cut_line = mirror_x_pts(cut_line, PANTRY_WIDTH)
                     outline = translate_points(outline, x_offset, y_offset)
                     cut_line = translate_points(cut_line, x_offset, y_offset)
-                    dogbone_centers_dxf = translate_points(dogbone_centers.copy(), x_offset, y_offset)
                     msp.add_lwpolyline([(p[0], p[1]) for p in outline], close=True,
                                        dxfattribs={'layer': 'BRACKET_OUTLINE', 'color': 6})
                     msp.add_line((cut_line[0][0], cut_line[0][1]), (cut_line[1][0], cut_line[1][1]),
                                 dxfattribs={'layer': 'BRACKET_CUT_LINE', 'color': 4})
-                    for dc in dogbone_centers_dxf:
-                        msp.add_circle((dc[0], dc[1]), DOGBONE_RADIUS,
-                                       dxfattribs={'layer': 'BRACKET_DOGBONE', 'color': 2})
                     shelf_brackets += 1
 
                 # Add side support brackets for back shelves
@@ -348,40 +407,38 @@ def main():
 
                     # Left side support bracket
                     left_x = config['left_wall']['wall_x']
-                    outline, cut_line, dogbone_centers = place_bracket(left_x, side_y, 'back_left_support', config)  # was: outline, cut_line
+                    outline, cut_line = place_bracket(left_x, side_y, 'back_left_support', config)
                     all_brackets[height].append({
                         'outline': outline.copy(),
                         'wall': 'back_left_support'
                     })
+                    # Mirror bracket X for bottom-face machining, then apply layout offset
+                    outline = mirror_x_pts(outline, PANTRY_WIDTH)
+                    cut_line = mirror_x_pts(cut_line, PANTRY_WIDTH)
                     outline = translate_points(outline, x_offset, y_offset)
                     cut_line = translate_points(cut_line, x_offset, y_offset)
-                    dogbone_centers_dxf = translate_points(dogbone_centers.copy(), x_offset, y_offset)
                     msp.add_lwpolyline([(p[0], p[1]) for p in outline], close=True,
                                        dxfattribs={'layer': 'BRACKET_OUTLINE', 'color': 6})
                     msp.add_line((cut_line[0][0], cut_line[0][1]), (cut_line[1][0], cut_line[1][1]),
                                 dxfattribs={'layer': 'BRACKET_CUT_LINE', 'color': 4})
-                    for dc in dogbone_centers_dxf:
-                        msp.add_circle((dc[0], dc[1]), DOGBONE_RADIUS,
-                                       dxfattribs={'layer': 'BRACKET_DOGBONE', 'color': 2})
                     shelf_brackets += 1
 
                     # Right side support bracket
                     right_x = config['right_wall']['wall_x']
-                    outline, cut_line, dogbone_centers = place_bracket(right_x, side_y, 'back_right_support', config)  # was: outline, cut_line
+                    outline, cut_line = place_bracket(right_x, side_y, 'back_right_support', config)
                     all_brackets[height].append({
                         'outline': outline.copy(),
                         'wall': 'back_right_support'
                     })
+                    # Mirror bracket X for bottom-face machining, then apply layout offset
+                    outline = mirror_x_pts(outline, PANTRY_WIDTH)
+                    cut_line = mirror_x_pts(cut_line, PANTRY_WIDTH)
                     outline = translate_points(outline, x_offset, y_offset)
                     cut_line = translate_points(cut_line, x_offset, y_offset)
-                    dogbone_centers_dxf = translate_points(dogbone_centers.copy(), x_offset, y_offset)
                     msp.add_lwpolyline([(p[0], p[1]) for p in outline], close=True,
                                        dxfattribs={'layer': 'BRACKET_OUTLINE', 'color': 6})
                     msp.add_line((cut_line[0][0], cut_line[0][1]), (cut_line[1][0], cut_line[1][1]),
                                 dxfattribs={'layer': 'BRACKET_CUT_LINE', 'color': 4})
-                    for dc in dogbone_centers_dxf:
-                        msp.add_circle((dc[0], dc[1]), DOGBONE_RADIUS,
-                                       dxfattribs={'layer': 'BRACKET_DOGBONE', 'color': 2})
                     shelf_brackets += 1
 
                 # Add corner brackets for back shelves
@@ -390,40 +447,38 @@ def main():
 
                     # Left corner bracket (facing right)
                     lc = corner_cfg['left_corner']
-                    outline, cut_line, dogbone_centers = place_bracket(lc['x'], lc['y'], 'corner_left', config)  # was: outline, cut_line
+                    outline, cut_line = place_bracket(lc['x'], lc['y'], 'corner_left', config)
                     all_brackets[height].append({
                         'outline': outline.copy(),
                         'wall': 'corner_left'
                     })
+                    # Mirror bracket X for bottom-face machining, then apply layout offset
+                    outline = mirror_x_pts(outline, PANTRY_WIDTH)
+                    cut_line = mirror_x_pts(cut_line, PANTRY_WIDTH)
                     outline = translate_points(outline, x_offset, y_offset)
                     cut_line = translate_points(cut_line, x_offset, y_offset)
-                    dogbone_centers_dxf = translate_points(dogbone_centers.copy(), x_offset, y_offset)
                     msp.add_lwpolyline([(p[0], p[1]) for p in outline], close=True,
                                        dxfattribs={'layer': 'BRACKET_OUTLINE', 'color': 6})
                     msp.add_line((cut_line[0][0], cut_line[0][1]), (cut_line[1][0], cut_line[1][1]),
                                 dxfattribs={'layer': 'BRACKET_CUT_LINE', 'color': 4})
-                    for dc in dogbone_centers_dxf:
-                        msp.add_circle((dc[0], dc[1]), DOGBONE_RADIUS,
-                                       dxfattribs={'layer': 'BRACKET_DOGBONE', 'color': 2})
                     shelf_brackets += 1
 
                     # Right corner bracket (facing left)
                     rc = corner_cfg['right_corner']
-                    outline, cut_line, dogbone_centers = place_bracket(rc['x'], rc['y'], 'corner_right', config)  # was: outline, cut_line
+                    outline, cut_line = place_bracket(rc['x'], rc['y'], 'corner_right', config)
                     all_brackets[height].append({
                         'outline': outline.copy(),
                         'wall': 'corner_right'
                     })
+                    # Mirror bracket X for bottom-face machining, then apply layout offset
+                    outline = mirror_x_pts(outline, PANTRY_WIDTH)
+                    cut_line = mirror_x_pts(cut_line, PANTRY_WIDTH)
                     outline = translate_points(outline, x_offset, y_offset)
                     cut_line = translate_points(cut_line, x_offset, y_offset)
-                    dogbone_centers_dxf = translate_points(dogbone_centers.copy(), x_offset, y_offset)
                     msp.add_lwpolyline([(p[0], p[1]) for p in outline], close=True,
                                        dxfattribs={'layer': 'BRACKET_OUTLINE', 'color': 6})
                     msp.add_line((cut_line[0][0], cut_line[0][1]), (cut_line[1][0], cut_line[1][1]),
                                 dxfattribs={'layer': 'BRACKET_CUT_LINE', 'color': 4})
-                    for dc in dogbone_centers_dxf:
-                        msp.add_circle((dc[0], dc[1]), DOGBONE_RADIUS,
-                                       dxfattribs={'layer': 'BRACKET_DOGBONE', 'color': 2})
                     shelf_brackets += 1
 
             bracket_count += shelf_brackets
@@ -449,7 +504,9 @@ def main():
             shelf_doc = ezdxf.readfile(shelf_info['file'])
             for entity in shelf_doc.modelspace():
                 if entity.dxftype() == 'LWPOLYLINE':
-                    points = np.array([(p[0], p[1]) for p in entity.get_points()])
+                    # Un-mirror X: DXF files are mirrored for bottom-face machining;
+                    # apply X → PANTRY_WIDTH - X again to restore pantry coordinates for PDF.
+                    points = np.array([(PANTRY_WIDTH - p[0], p[1]) for p in entity.get_points()])
                     shelf_polygons[height].append({
                         'points': points,
                         'type': shelf_info['type'],

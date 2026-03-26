@@ -35,13 +35,18 @@ RIGHT_INTERMEDIATE_HEIGHTS = [5, 13, 26, 33, 46, 53, 66, 73, 86]
 
 
 def load_shelf_from_dxf(dxf_path):
-    """Load shelf outline vertices from a DXF file (LWPolyline)."""
+    """Load shelf outline vertices from a DXF file (LWPolyline).
+
+    DXF files are mirrored (X → PANTRY_WIDTH - X) for bottom-face CNC machining.
+    Un-mirror here to restore pantry coordinates for the Blender scene.
+    """
     doc = ezdxf.readfile(str(dxf_path))
     msp = doc.modelspace()
 
     for entity in msp:
         if entity.dxftype() == 'LWPOLYLINE':
-            verts = [(v[0], v[1]) for v in entity.get_points(format='xy')]
+            # Un-mirror: apply X → PANTRY_WIDTH - X to invert the machining mirror
+            verts = [(PANTRY_WIDTH - v[0], v[1]) for v in entity.get_points(format='xy')]
             if len(verts) > 1 and np.allclose(verts[0], verts[-1], atol=1e-6):
                 verts = verts[:-1]
             return verts
