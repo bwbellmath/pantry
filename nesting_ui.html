@@ -71,6 +71,11 @@ body { display: flex; flex-direction: column; height: 100vh; font-family: monosp
   <button class="btn" id="btnAddSheet">+ Sheet</button>
   <button class="btn" id="btnRotate" title="Key: R">Rotate 90° (R)</button>
   <div class="sep"></div>
+  <button class="btn" id="btnSnapTop"    title="Snap selected shelf's top edge to sheet top edge">⬆ Snap Top</button>
+  <button class="btn" id="btnSnapBottom" title="Snap selected shelf's bottom edge to sheet bottom edge">⬇ Snap Bottom</button>
+  <button class="btn" id="btnSnapLeft"   title="Snap selected shelf's left edge to sheet left edge">⬅ Snap Left</button>
+  <button class="btn" id="btnSnapRight"  title="Snap selected shelf's right edge to sheet right edge">➡ Snap Right</button>
+  <div class="sep"></div>
   <button class="btn warn" id="btnCheck" title="Key: C">Check (C)</button>
   <button class="btn primary" id="btnExport" title="Key: E">Export (E)</button>
   <div class="sep"></div>
@@ -107,15 +112,16 @@ const STAGING_X = 105, STAGING_Y = 0;  // area for unplaced shelves
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const S = {
-  geom:       {},   // name → {poly, brackets, cuts, bbox, shelf_type}
-  sheets:     [],   // [{id}]
-  placements: [],   // [{id, name, sheetIdx, x, y, rot}]  x,y = centroid in SVG global coords
-  nextPid:    0,
-  selected:   null, // placement id
-  vb:         {x: -5, y: -5, w: 210, h: 80},
-  drag:       null, // {pid, ox, oy, svgStartX, svgStartY}
-  pan:        null, // {startX, startY, origVb}
-  loaded:     false,
+  geom:          {},    // name → {poly, brackets, cuts, bbox, shelf_type}
+  sheets:        [],    // [{id}]
+  placements:    [],    // [{id, name, sheetIdx, x, y, rot}]  x,y = centroid in SVG global coords
+  nextPid:       0,
+  selected:      null,  // placement id
+  vb:            {x: -5, y: -5, w: 210, h: 80},
+  drag:          null,  // {pid, ox, oy, sx, sy}
+  pan:           null,  // {sx, sy, vb}
+  loaded:        false,
+  pendingLayout: null,  // layout JSON waiting for geometry to load
 };
 
 // ─── SVG helpers ──────────────────────────────────────────────────────────────
@@ -410,7 +416,7 @@ function checkClearances() {
   for (const p of ps) {
     const oy = sheetOriginY(p.sheetIdx);
     const [x0, y0, x1, y1] = worldBBox(p);
-    if (x0 < -0.01 || y0 < oy - 0.01 || x1 > SW + 0.01 || y1 > oy + SH + 0.01) {
+    if (x0 < -0.001 || y0 < oy - 0.001 || x1 > SW + 0.001 || y1 > oy + SH + 0.001) {
       oob++;
       markViol(p);
     }
@@ -523,8 +529,14 @@ function importLayout(data) {
 
   renderSheets();
   renderAll();
+
+  // Reset view to show all sheets
+  const numSheets = S.sheets.length;
+  const totalH = numSheets * (SH + SGAP) + 10;
+  S.vb = {x: -5, y: -5, w: SW + 15, h: totalH};
   setVB();
-  setStatus(`Layout loaded: ${S.placements.length} shelves on ${S.sheets.length} sheet(s).`);
+
+  setStatus(`Layout loaded: ${S.placements.length} shelves on ${numSheets} sheet(s).`);
 }
 
 // ─── Drag & drop ─────────────────────────────────────────────────────────────
@@ -641,10 +653,33 @@ document.addEventListener('keydown', e => {
 });
 
 // ─── Button wiring ────────────────────────────────────────────────────────────
-document.getElementById('btnRotate').onclick  = rotateSelected;
-document.getElementById('btnCheck').onclick   = checkClearances;
-document.getElementById('btnExport').onclick  = exportLayout;
-document.getElementById('btnAddSheet').onclick = addSheet;
+// ─── Snap to edge ─────────────────────────────────────────────────────────────
+function snapToEdge(dir) {
+  if (S.selected === null) { setStatus('Select a shelf first.'); return; }
+  const p = S.placements.find(q => q.id === S.selected);
+  if (!p || p.sheetIdx < 0) { setStatus('Shelf must be on a sheet.'); return; }
+
+  const oy = sheetOriginY(p.sheetIdx);
+  const [x0, y0, x1, y1] = worldBBox(p);
+
+  if      (dir === 'top')    p.y += oy - y0;
+  else if (dir === 'bottom') p.y += (oy + SH) - y1;
+  else if (dir === 'left')   p.x += 0 - x0;
+  else if (dir === 'right')  p.x += SW - x1;
+
+  renderPlacement(p);
+  vilG.innerHTML = '';
+  document.getElementById('checkResult').textContent = '';
+}
+
+document.getElementById('btnRotate').onclick     = rotateSelected;
+document.getElementById('btnCheck').onclick      = checkClearances;
+document.getElementById('btnExport').onclick     = exportLayout;
+document.getElementById('btnAddSheet').onclick   = addSheet;
+document.getElementById('btnSnapTop').onclick    = () => snapToEdge('top');
+document.getElementById('btnSnapBottom').onclick = () => snapToEdge('bottom');
+document.getElementById('btnSnapLeft').onclick   = () => snapToEdge('left');
+document.getElementById('btnSnapRight').onclick  = () => snapToEdge('right');
 
 document.getElementById('btnLoadGeom').onclick = () =>
   document.getElementById('fileGeom').click();
@@ -682,7 +717,14 @@ document.getElementById('fileGeom').addEventListener('change', e => {
       const totalH = S.sheets.length * (SH + SGAP) + 20;
       S.vb = {x: -5, y: -5, w: STAGING_X + SW + 10, h: totalH};
       setVB();
-      setStatus(`Loaded ${names.length} shelves. Drag them onto sheets.`);
+
+      // Auto-apply a layout that was loaded before geometry was ready
+      if (S.pendingLayout) {
+        importLayout(S.pendingLayout);
+        S.pendingLayout = null;
+      } else {
+        setStatus(`Loaded ${names.length} shelves. Drag them onto sheets.`);
+      }
     } catch(err) {
       alert('Error parsing geometry JSON: ' + err.message);
     }
@@ -693,11 +735,19 @@ document.getElementById('fileGeom').addEventListener('change', e => {
 
 document.getElementById('fileLayout').addEventListener('change', e => {
   const f = e.target.files[0]; if (!f) return;
-  if (!S.loaded) { alert('Load geometry JSON first.'); return; }
   const r = new FileReader();
   r.onload = ev => {
-    try { importLayout(JSON.parse(ev.target.result)); }
-    catch(err) { alert('Error parsing layout JSON: ' + err.message); }
+    try {
+      const data = JSON.parse(ev.target.result);
+      if (!S.loaded) {
+        // Geometry not loaded yet — stash layout and prompt for geometry
+        S.pendingLayout = data;
+        setStatus('Layout queued — now load nesting_geometry.json to restore.');
+        document.getElementById('fileGeom').click();
+      } else {
+        importLayout(data);
+      }
+    } catch(err) { alert('Error parsing layout JSON: ' + err.message); }
   };
   r.readAsText(f);
   e.target.value = '';

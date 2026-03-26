@@ -7,6 +7,15 @@
     "Standard 2x4 stud is 1.5\" wide"
   ],
 
+  "bracket_bom": {
+    "description": "Total bracket count by tongue length across all 25 shelves",
+    "note": "tongue_length is the portion routed into the shelf; base plate is always 3.2\" wide x 0.2\" thick",
+    "4_inch":  { "tongue_length_in": 4,  "count": 47, "used_for": "right wall (3 studs × 10 R-shelves) + back shelf corner brackets (2 × 4 B-shelves)" },
+    "6_inch":  { "tongue_length_in": 6,  "count": 16, "used_for": "left wall (2 studs × 8 L-shelves)" },
+    "10_inch": { "tongue_length_in": 10, "count": 20, "used_for": "back wall (3 studs × 4 B-shelves) + back shelf side brackets (2 × 4 B-shelves)" },
+    "total": 83
+  },
+
   "bracket_base_width": 3.2,
   "bracket_base_height": 0.2,
   "bracket_stem_width": 1.6,
