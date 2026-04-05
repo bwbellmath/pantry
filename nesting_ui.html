@@ -71,6 +71,7 @@ body { display: flex; flex-direction: column; height: 100vh; font-family: monosp
   <button class="btn" id="btnAddSheet">+ Sheet</button>
   <button class="btn" id="btnRotate" title="Key: R">Rotate 90° (R)</button>
   <div class="sep"></div>
+  <label style="font-size:12px;color:#ccc">Snap offset&nbsp;<input id="snapOffset" type="number" value="0.125" step="0.0625" min="0" style="width:52px;background:#333;color:#eee;border:1px solid #555;padding:2px 4px;font-size:12px">&nbsp;in</label>
   <button class="btn" id="btnSnapTop"    title="Snap selected shelf's top edge to sheet top edge">⬆ Snap Top</button>
   <button class="btn" id="btnSnapBottom" title="Snap selected shelf's bottom edge to sheet bottom edge">⬇ Snap Bottom</button>
   <button class="btn" id="btnSnapLeft"   title="Snap selected shelf's left edge to sheet left edge">⬅ Snap Left</button>
@@ -662,10 +663,11 @@ function snapToEdge(dir) {
   const oy = sheetOriginY(p.sheetIdx);
   const [x0, y0, x1, y1] = worldBBox(p);
 
-  if      (dir === 'top')    p.y += oy - y0;
-  else if (dir === 'bottom') p.y += (oy + SH) - y1;
-  else if (dir === 'left')   p.x += 0 - x0;
-  else if (dir === 'right')  p.x += SW - x1;
+  const off = parseFloat(document.getElementById('snapOffset').value) || 0;
+  if      (dir === 'top')    p.y += (oy + off) - y0;
+  else if (dir === 'bottom') p.y += (oy + SH - off) - y1;
+  else if (dir === 'left')   p.x += off - x0;
+  else if (dir === 'right')  p.x += (SW - off) - x1;
 
   renderPlacement(p);
   vilG.innerHTML = '';

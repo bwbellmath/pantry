@@ -1,171 +1,26 @@
-# Procedural Pantry Shelf Designer
+# Pantry Shelf Designer
 
-A Python-based tool for designing and rendering procedurally-generated pantry shelves with sinusoidal edge perturbations and tangent circle corners.
-
-## Project Status: ✅ FULLY FUNCTIONAL
-
-This project generates custom pantry shelving with organic, sinusoidal edges. Each shelf's depth varies according to a sine wave with a random phase offset, creating unique, flowing shapes. The system produces:
-- **Exact SVG cutting templates** for all 25 shelf pieces
-- **Photorealistic 3D renderings** using Blender + Cycles
-- **Life-size plywood layout PDFs** at 150 DPI for printing
+Procedural custom pantry shelf system for a 48" × 49" × 105" walk-in pantry.
+Shelves have sinusoidal edges with tangent-circle corners. Full pipeline: geometry
+computation → SVG/DXF export → interactive nesting UI → plywood cut sheets.
 
 ---
 
-## Current Pantry Configuration
+## Quick Start
 
-### Pantry Specifications
-- **Dimensions**: 48" wide × 49" deep × 105" tall (8' 9")
-- **Layout**: Door on North wall, shelves on East (left), South (back), and West (right) walls
-- **Door clearance**: 6" East side, 4" West side
-
-### Shelf Design Parameters (CURRENT VALUES)
-- **Base depth**:
-  - **Left (East) wall**: 7"
-  - **Back (South) wall**: 19"
-  - **Right (West) wall**: 5" ⭐ (updated from 4")
-- **Sinusoid perturbation**: **1" amplitude** ⭐ (updated from 2"), 24" period
-- **Depth formula**: `depth(position) = base_depth + 1" × sin(2π × position / 24" + random_offset)`
-- **Thickness**: 1" (extruded solid)
-- **Corner radius**: 3" (interior corners at back wall)
-- **Total shelves**: **25 pieces** across **17 unique height levels**
-
-### Corner Treatment
-- **East/West × South corners**: Smooth 3" radius arcs tangent to both sinusoidal edges
-- **East/West × North corners**: Horizontal cut lines (door clearance)
-- **Left/Right back corners**: Mathematically precise tangent circles solving for dual-sinusoid tangency
-
----
-
-## Shelf Inventory
-
-### Main Shelves (Full L-shaped: Left + Back + Right)
-Complete shelves spanning all three walls:
-- **19"** from floor: `shelf_L19.svg`, `shelf_B19.svg`, `shelf_R19.svg`
-- **39"** from floor: `shelf_L39.svg`, `shelf_B39.svg`, `shelf_R39.svg`
-- **59"** from floor: `shelf_L59.svg`, `shelf_B59.svg`, `shelf_R59.svg`
-- **79"** from floor: `shelf_L79.svg`, `shelf_B79.svg`, `shelf_R79.svg`
-
-### Left Intermediate Shelves (East wall only, 7" depth)
-- **9"**, **29"**, **49"**, **69"** from floor: `shelf_L9.svg`, `shelf_L29.svg`, `shelf_L49.svg`, `shelf_L69.svg`
-
-### Right Intermediate Shelves (West wall only, 5" depth)
-- **5"**, **13"**, **26"**, **33"**, **46"**, **53"**, **66"**, **73"**, **86"** from floor
-- 9 pieces: `shelf_R5.svg` through `shelf_R86.svg`
-
-**Total**: 25 shelf pieces (12 main + 4 left + 9 right)
-
----
-
-## Complete Workflow (CURRENT - January 2026)
-
-### 1. Generate Exact Geometry & SVG Files (NEW: Construction-Based)
 ```bash
+# 1. Generate all shelf geometry + SVGs/DXFs
 python scripts/generate_from_patterns.py
+
+# 2. Export geometry for nesting UI
+python scripts/export_shelf_geometry.py        # → nesting_geometry.json
+
+# 3. Open browser-based nesting tool
+open nesting_ui.html                            # manually arrange shelves on sheets
+
+# 4. Generate DXF cut sheets from nesting layout
+python generate_dxf_from_layout.py             # reads nesting_layout.json
 ```
-
-**Outputs:**
-- `output/shelf_*.svg` - 25 exact SVG cutting templates
-- `output/shelf_*.dxf` - 25 DXF CAD files for laser cutters/CNC
-- `output/pantry_layout.pdf` - **NEW!** Assembly guide with:
-  - 17 pages (one per shelf level)
-  - Color-coded shelves (blue=left, red=right, green=back)
-  - Shelves shown in correct anchored positions
-  - Dimension annotations and wall labels
-
-**Legacy Script (still available):**
-```bash
-python scripts/extract_and_export_geometry.py
-```
-- Uses procedural approach instead of JSON patterns
-- Outputs same files with `_exact` suffix
-
-**What it does:**
-- Loads construction patterns from `configs/shelf_level_patterns.json`
-- Computes base geometry per level (sinusoids, intersections, tangent arcs)
-- Executes construction sequences (points, lines, arcs, sinusoid segments)
-- Door smoothing using alt_9.py rotation-based solver
-- Generates exact polygon coordinates for each shelf
-- Creates assembly layout PDF with color-coded shelves
-- Exports SVG and DXF files for each piece
-
-### 2. Generate Photorealistic 3D Renderings
-```bash
-blender --background --python scripts/render_from_svg.py
-```
-
-**Outputs:**
-- `output/renders/pantry_center_view.png` - Center doorway perspective
-- `output/renders/pantry_angled_view.png` - Side angle perspective
-
-**What it does:**
-- Loads exact geometry from all 25 SVG files
-- Creates 3D meshes by extruding polygons to 1" thickness
-- Applies Baltic birch plywood materials (edge plies + wood grain)
-- Sets up realistic lighting (point light + fill light)
-- Renders at 1920×1080, 128 samples, Cycles engine
-- Takes ~12-15 minutes per view
-
-### 3. Configuration Management
-Configuration is stored in `configs/pantry_NNNN.json` files:
-
-```json
-{
-  "config_version": "0002",
-  "pantry": {
-    "width": 48.0,
-    "depth": 49.0,
-    "height": 105.0,
-    "door_clearance_east": 6.0,
-    "door_clearance_west": 4.0
-  },
-  "design_params": {
-    "sinusoid_period": 24.0,
-    "sinusoid_amplitude": 1.0,
-    "shelf_base_depth_east": 7.0,
-    "shelf_base_depth_south": 19.0,
-    "shelf_base_depth_west": 5.0,
-    "shelf_thickness": 1.0,
-    "interior_corner_radius": 3.0,
-    "door_corner_radius": 3.0
-  },
-  "shelves": [...]
-}
-```
-
-**To modify parameters:**
-1. Edit config file directly, OR
-2. Update defaults in `src/config.py` (`_create_default_config()`)
-3. Regenerate: `python scripts/extract_and_export_geometry.py`
-
----
-
-## Kitchen Corner Shelves (Separate Project)
-
-A secondary project for kitchen corner shelving using similar geometry.
-
-### Specifications
-- **Space**: 37" along wall × 12" depth (cabinet corner)
-- **Shelves**: 3 shelves at 12", 24", 36" from ceiling
-- **Thickness**: 1"
-- **Sinusoid**: 1" amplitude, 24" period
-- **Corner radius**: 4" (bottom-right corner)
-
-### Generate Kitchen Corner Shelves
-```bash
-python scripts/generate_kitchen_corner_shelves.py
-```
-
-**Outputs:**
-- `output/kitchen_corner/kitchen_corner_shelf_12in.svg` (and 24in, 36in)
-- `output/kitchen_corner/kitchen_corner_shelf_12in.png` (visualizations)
-- `output/kitchen_corner/kitchen_corner_cutting_templates.pdf`
-
-**Geometry:**
-- Cabinet corner at top-left (90° angle, no radius)
-- Right edge: Sinusoidal (varying around 12" depth)
-- Bottom edge: Straight
-- Bottom-right corner: 4" radius arc tangent to both edges
-- Uses controlled phase offsets for stable arc solutions
 
 ---
 
@@ -173,339 +28,243 @@ python scripts/generate_kitchen_corner_shelves.py
 
 ```
 pantry/
-├── README.md                      # This file
-├── CONSTRUCTION_PATTERNS.md       # Construction-based geometry guide
-├── requirements.txt               # Python dependencies
-├── configs/                       # JSON configuration files
-│   ├── shelf_level_patterns.json # Construction-based geometry spec
-│   ├── pantry_0000.json          # Initial config (legacy)
-│   ├── pantry_0002.json          # Current active config (legacy)
-│   └── pantry_NNNN.json          # Additional variants (legacy)
-├── src/                          # Core library modules
-│   ├── config.py                 # Configuration management
-│   ├── geometry.py               # Tangent circle solver, sinusoids
-│   ├── blender_renderer.py       # Blender material/lighting utilities
-│   └── utils.py                  # Coordinate conversions
-├── scripts/                      # Executable scripts
-│   ├── extract_and_export_geometry.py  # ⭐ MAIN: Generate exact SVGs & PDF
-│   ├── render_from_svg.py              # ⭐ MAIN: Blender rendering from SVGs
-│   ├── generate_kitchen_corner_shelves.py  # Kitchen corner variant
-│   ├── generate_config.py        # Config file generator
-│   ├── test_gp_curve.py          # GP/kriging curve tests
-│   ├── test_tangent_circles.py   # Tangent circle geometry tests
-│   ├── verify_geometry.py        # Geometry validation
-│   └── old/                      # Deprecated scripts (pre-SVG workflow)
-└── output/                       # Generated files
-    ├── shelf_*.svg               # 25 exact SVG cutting templates
-    ├── exact_cutting_templates.pdf  # Complete PDF guide
-    ├── renders/                  # Blender 3D renderings
-    │   ├── pantry_center_view.png
-    │   └── pantry_angled_view.png
-    └── kitchen_corner/           # Kitchen corner shelf outputs
-        ├── kitchen_corner_shelf_*.svg
-        └── kitchen_corner_cutting_templates.pdf
+│
+├── README.md                          # This file
+├── CONSTRUCTION_PATTERNS.md           # Geometric primitive reference
+├── requirements.txt
+│
+├── configs/
+│   ├── shelf_level_patterns.json      # PRIMARY: all 25 shelves as construction sequences
+│   ├── stud_positions.json            # Wall stud positions + bracket BOM (83 total)
+│   ├── pantry_0002.json               # Current active pantry config (legacy)
+│   └── pantry_000{0,1,3,4,5}.json    # Historical config variants (legacy)
+│
+├── src/                               # Core library
+│   ├── geometry.py                    # Geometric solvers
+│   │   ├── sinusoid_depth()           # Sine-wave depth at a position
+│   │   ├── sinusoid_depth_derivative()
+│   │   ├── generate_sinusoid_points() # Sample sinusoid into point array
+│   │   ├── solve_interior_corner()    # Arc tangent to two sinusoids (scipy)
+│   │   ├── solve_door_corner()        # Door-clearance notch arc
+│   │   ├── CornerSolver               # Class: iterative tangent-circle solver
+│   │   ├── solve_tangent_circle_two_sinusoids()       # Primary solver (scipy)
+│   │   ├── solve_tangent_circle_two_sinusoids_newton() # Newton's method solver
+│   │   ├── tangent_circle_two_sinusoids_offset_intersection()
+│   │   ├── generate_circle_arc()      # Discretize an arc
+│   │   ├── wall_to_pantry_coords()
+│   │   ├── pantry_to_wall_coords()
+│   │   ├── create_shelf_outline()     # Build full polygon for one shelf
+│   │   ├── is_point_in_interior()
+│   │   └── generate_interior_mask()
+│   │
+│   ├── config.py
+│   │   └── ShelfConfig                # Dataclass: pantry dims + design params
+│   │
+│   ├── shelf_generator.py
+│   │   ├── ShelfFootprint             # Dataclass: polygon + metadata
+│   │   └── ShelfGenerator             # Class: generates all shelves from config
+│   │
+│   ├── pdf_generator.py               # PDF layout page rendering
+│   └── blender_renderer.py            # Blender material/lighting helpers
+│
+├── scripts/                           # Runnable entry points
+│   │
+│   ├── generate_from_patterns.py      # ★ MAIN GENERATOR (construction-based)
+│   │   ├── ReferenceResolver          # Resolves JSON cross-references
+│   │   ├── solve_door_smoothing_alt9()# Rotation-based tangent arc solver
+│   │   ├── BaseGeometrySolver         # Computes sinusoids, intersections, arcs per level
+│   │   ├── ConstructionRenderer       # Walks construction sequences → polygon pts
+│   │   ├── GeometryExporter           # SVG / DXF / PDF export
+│   │   ├── apply_pipe_cutout()        # Circular cutout in polygon
+│   │   ├── apply_outlet_cutout()      # Rectangular outlet notch
+│   │   └── main()
+│   │
+│   ├── extract_and_export_geometry.py # Legacy generator (procedural, not pattern-based)
+│   │   ├── find_brackets()            # Root-bracket finder
+│   │   ├── bisect_root()              # Bisection root solver
+│   │   ├── solve_tangent_circle_horizontal_sinusoid()
+│   │   ├── solve_door_smoothing_radius()
+│   │   ├── solve_door_smoothing_fixed_radius()
+│   │   ├── generate_intermediate_shelf()
+│   │   ├── extract_exact_shelf_geometries()
+│   │   ├── export_polygon_to_svg()
+│   │   ├── export_polygon_to_dxf()
+│   │   ├── export_all_shelves_to_combined_dxf()
+│   │   ├── simple_2d_pack()           # Greedy strip packer
+│   │   └── main()
+│   │
+│   ├── generate_nested_layouts.py     # Shared nesting data model + DXF export
+│   │   ├── ShelfGroup                 # Shapely polygon + bracket geometry for one shelf
+│   │   ├── ShelfPair                  # Two shelves packed together
+│   │   ├── Sheet                      # One 96"×48" plywood sheet
+│   │   ├── export_sheet_to_dxf()      # Write Sheet → DXF via ezdxf
+│   │   ├── load_shelves()             # Load all per-shelf DXFs → ShelfGroup list
+│   │   ├── standardize_shelf()        # Mirror X, flip to nesting orientation
+│   │   ├── create_tight_pair()        # Pack two shelves back-to-back
+│   │   └── main()                     # Automated nesting (legacy)
+│   │
+│   ├── export_shelf_geometry.py       # Export geometry → nesting_geometry.json
+│   │   ├── bbox_center()
+│   │   ├── transform_pts()            # Re-center at (0,0), flip Y
+│   │   ├── extract_linestring_coords()
+│   │   └── main()
+│   │
+│   ├── generate_shelves_with_brackets.py  # Visualize shelves with bracket locations
+│   │
+│   ├── render_from_svg.py             # Blender rendering from SVG files
+│   ├── render_blender.py              # Blender scene setup utilities
+│   │
+│   ├── generate_kitchen_corner_shelves.py          # Kitchen corner shelf variant
+│   ├── generate_kitchen_corner_shelves_kriging.py  # GP/kriging variant (experimental)
+│   │
+│   ├── test_gp_curve.py               # Gaussian Process curve tests
+│   ├── test_tangent_circles.py        # Tangent circle solver tests
+│   ├── test_nesting.py                # Nesting algorithm tests
+│   ├── test_bounds.py                 # Bounds validation tests
+│   ├── verify_geometry.py             # Geometry sanity checks
+│   ├── sin_sin_circle_test.py         # Sinusoid-circle intersection tests
+│   ├── debug_overview.py              # Visual debug overview
+│   ├── plot_back_left_level19_debug.py
+│   │
+│   ├── alt_{4,5,6,7,8,9}.py          # Door-smoothing solver iterations (alt_9 is current)
+│   ├── alt_intersector{,_2,_3}.py     # Intersection solver iterations
+│   ├── generate_config.py             # Config file generator
+│   │
+│   └── old/                           # Deprecated pre-SVG scripts
+│       ├── generate_shelves.py
+│       ├── generate_pdfs.py
+│       ├── generate_cutting_pdf.py
+│       ├── generate_final_templates.py
+│       ├── render_2d.py / render_3d.py / render_complete_pantry.py / render_full_pantry.py
+│       ├── apply_manual_layout_from_svg.py
+│       └── test_{dxf,pair,svg_matching,svg_parser,svg_scale}.py
+│
+├── nesting_ui.html                    # ★ Browser-based interactive nesting tool
+│   # (single-file HTML/CSS/JS, no build step)
+│   # Features: pan/zoom SVG, drag shelves, R=rotate 90°, C=check gaps,
+│   #           E=export JSON, snap-to-edge buttons, bracket BOM display
+│   # Reads:  nesting_geometry.json
+│   # Writes: nesting_layout.json  (via Export button)
+│
+├── generate_dxf_from_layout.py        # ★ Convert nesting JSON → per-sheet DXF
+│   ├── rot_pt()                       # 90° CW rotation (SVG → CCW in DXF)
+│   ├── transform_pts()                # Rotate + Y-flip + translate
+│   ├── add_polyline()                 # Add lwpolyline to DXF modelspace
+│   ├── export_sheet_dxf()             # One sheet → DXF file
+│   └── main()
+│
+├── nest_from_inkscape.py              # Inkscape SVG → polished DXF (alternative workflow)
+│   ├── parse_matrix()                 # Parse SVG matrix() transform
+│   ├── build_nesting_affine()         # SVG matrix → Shapely affine coefficients
+│   ├── apply_nesting_transform()      # Transform ShelfGroup geometry in-place
+│   ├── parse_svg_shelves()            # Extract shelf positions from Inkscape SVG
+│   ├── _sep_direction()               # Push direction (min-penetration axis)
+│   ├── build_adjacency()              # Proximity graph of shelves
+│   ├── bfs_order()                    # BFS traversal from anchor
+│   ├── _clamp_to_sheet()              # Push shelf back inside sheet bounds
+│   ├── polish_layout()                # Force-averaging gap enforcement (0.5" min)
+│   ├── validate_layout()              # Report gap + bounds violations
+│   └── main()
+│
+├── debug_sheet_order.py               # Debug: print sheet shelf ordering
+├── debug_svg_coords.py                # Debug: print SVG coordinate values
+├── dump_svg.py                        # Debug: dump SVG element tree
+│
+├── nesting_geometry.json              # Generated: shelf polygons centered at (0,0)
+├── nesting_layout.json                # Generated: shelf placement per sheet (from UI export)
+├── nesting_layout_old.json            # Backup of previous layout
+│
+├── Inkscape/                          # Manual Inkscape nesting layouts (SVG source)
+│   ├── Panty_Sheet_1.svg
+│   └── Panty_Sheet_2.svg
+│
+└── output/                            # All generated outputs
+    ├── shelf_L{9,19,29,39,49,59,69,79}.{svg,dxf}   # Left wall shelves
+    ├── shelf_B{19,39,59,79}.{svg,dxf}               # Back wall shelves
+    ├── shelf_R{5,13,19,26,33,39,46,53,59,66,73,79,86}.{svg,dxf}  # Right wall shelves
+    ├── shelf_*_exact.dxf              # DXF variants with exact suffix (legacy extract script)
+    ├── pantry_layout.pdf              # Assembly guide (17 pages, color-coded by wall)
+    ├── sheet_{1,2}_nesting.dxf        # ★ Final cut sheets (from nesting workflow)
+    ├── renders/                       # Blender renders + SVG-based previews
+    └── kitchen_corner_kriging/        # Kitchen corner GP experiment outputs
 ```
 
 ---
 
-## Development Philosophy: Construction-Based Geometry
+## Pantry Specifications
 
-### Overview
+| Parameter | Value |
+|---|---|
+| Dimensions | 48" wide × 49" deep × 105" tall |
+| Total shelves | 25 pieces across 17 height levels |
+| Left wall depth | 7" base + 1" sine amplitude |
+| Back wall depth | 19" base + 1" sine amplitude |
+| Right wall depth | 5" base + 1" sine amplitude |
+| Sine period | 24" |
+| Corner radius | 3" (interior back corners) |
+| Plywood sheets | 2 sheets @ 96" × 48" |
 
-This project follows a **construction-based development approach** where every shelf is completely specified as a sequence of geometric primitives in JSON configuration files. This approach separates the geometric specification from the rendering implementation, making the system data-driven and highly flexible.
+### Shelf Inventory
 
-### Core Principles
+| Set | Heights | Count |
+|---|---|---|
+| Left (L) | 9, 19, 29, 39, 49, 59, 69, 79" | 8 |
+| Back (B) | 19, 39, 59, 79" | 4 |
+| Right (R) | 5, 13, 19, 26, 33, 39, 46, 53, 59, 66, 73, 79, 86" | 13 |
 
-1. **JSON-Driven Geometry**: All shelf shapes are defined in JSON configuration files, not in procedural Python code
-2. **Base Geometry First**: For each height level, we compute shared geometric elements first (sinusoid intersections, tangent arcs, etc.)
-3. **Primitive Composition**: Each shelf is described as a closed path composed of:
-   - Points (explicit coordinates)
-   - Straight lines (between points)
-   - Sinusoid segments (portions of sinusoidal curves)
-   - Arc segments (circular arcs with specified properties)
-   - Solved arcs (arcs computed to be tangent to other curves)
+### Bracket BOM
 
-4. **Reference System**: Geometric elements can reference other elements (e.g., "arc midpoint from back_right_arc")
-5. **No Hard-Coded Dimensions**: All dimensions reference base parameters, ensuring changes propagate correctly
-
-### Construction Pattern: Main Shelf Levels
-
-For main shelf levels (with left, back, and right shelves), the construction follows this pattern:
-
-**Base Geometry:**
-```
-- 3 sinusoids: right, left, back (each with period, amplitude, phase_offset)
-- 2 intersections: back_right, back_left (where sinusoids meet)
-- 2 tangent arcs: back_right_arc, back_left_arc (slope-matching circles)
-- 2 arc midpoints: points that divide back shelf from left/right shelves
-```
-
-**Right Shelf Construction:**
-```
-1. Start at (pantry_width, 0)
-2. Straight line along door edge
-3. Door notch arc (concave quarter-circle)
-4. Straight line along extended door line
-5. Door smoothing arc (convex, tangent to sinusoid)
-6. Sinusoid segment (right edge) from smoothing to back arc
-7. Arc segment (back corner) from sinusoid to arc midpoint
-8. Straight line back to wall
-9. Straight line along wall (closes path)
-```
-
-**Back Shelf Construction:**
-```
-1. Start at back_left_arc_midpoint
-2. Arc segment from midpoint to back sinusoid
-3. Sinusoid segment along back edge
-4. Arc segment from back sinusoid to back_right_arc_midpoint
-5. Straight line closes path
-```
-
-### Configuration File: `shelf_level_patterns.json`
-
-The primary geometric specification is in `configs/shelf_level_patterns.json`. Key structure:
-
-```json
-{
-  "base_dimensions": { /* pantry size, door clearances */ },
-  "design_params": { /* sinusoid parameters, radii */ },
-  "levels": [
-    {
-      "height": 19.0,
-      "type": "main",
-      "base_geometry": {
-        "sinusoids": { /* right, left, back definitions */ },
-        "intersections": { /* computed intersection points */ },
-        "arcs": { /* tangent circle solutions */ },
-        "arc_midpoints": { /* dividing points */ }
-      },
-      "shelves": {
-        "right": { "construction": [ /* step-by-step primitives */ ] },
-        "left": { "construction": [ /* step-by-step primitives */ ] },
-        "back": { "construction": [ /* step-by-step primitives */ ] }
-      }
-    }
-  ]
-}
-```
-
-### Why This Approach?
-
-**Advantages:**
-- **Flexibility**: Modify base geometry without touching rendering code
-- **Maintainability**: Clear separation between geometric spec and implementation
-- **Reusability**: Construction templates can be reused across levels
-- **Transparency**: Complete geometric intent visible in JSON
-- **Validation**: Easy to verify geometric consistency
-- **Extensibility**: New primitive types can be added without breaking existing shelves
-
-**Example Workflow:**
-1. Modify a sinusoid amplitude in `base_dimensions`
-2. All dependent geometry (intersections, arcs, shelves) updates automatically
-3. Regenerate SVG/PDF with `python scripts/extract_and_export_geometry.py`
-4. No code changes required
-
-### Detailed Documentation
-
-For complete documentation of the construction-based approach, including:
-- Geometric primitive reference
-- Solver method specifications
-- Step-by-step examples
-- Adding new features
-
-See **[CONSTRUCTION_PATTERNS.md](CONSTRUCTION_PATTERNS.md)**
-
-### Future Development
-
-When adding new features:
-- **Add base geometry elements** in the `base_geometry` section
-- **Define new primitives** in the `construction` arrays
-- **Implement solvers** in `src/geometry.py` for new constraint types
-- **Update renderer** in scripts to interpret new primitive types
-- **Never hard-code** shelf-specific dimensions in Python code
-
-## Technical Details
-
-### Coordinate System
-- **Origin**: Northwest corner (door side, left when looking in)
-- **X-axis**: West to East (left to right) [0 to 48"]
-- **Y-axis**: North to South (door to back) [0 to 49"]
-- **Z-axis**: Floor to ceiling (up) [0 to 105"]
-
-### Wall Nomenclature
-- **East (E)** = Left wall (x = 0)
-- **South (S)** = Back wall (y = 49)
-- **West (W)** = Right wall (x = 48)
-- **North (N)** = Door wall (y = 0)
-
-### Tangent Circle Solver (`geometry.py`)
-Solves for circles tangent to two sinusoidal curves using:
-- Scipy optimization (`minimize`)
-- Gradient constraints for tangency
-- Interior/exterior validation
-- **Special handling**: Arc direction varies by level; B59 auto-detection
-
-### SVG Export
-- Exact coordinates from solver (no approximation)
-- Polygon format: counter-clockwise vertex ordering
-- Viewbox scaled to shelf dimensions
-- Compatible with laser cutters, CNC routers
-
-### Blender Materials
-- **Edge texture**: 9 alternating plies (Baltic birch)
-- **Top/bottom**: Procedural wood grain (Musgrave texture)
-- **Lighting**: Point light + fill light for realistic shadows
+| Tongue length | Count | Used for |
+|---|---|---|
+| 4" | 47 | Right wall (3 studs × 10 shelves) + back shelf corner brackets |
+| 6" | 16 | Left wall (2 studs × 8 shelves) |
+| 10" | 20 | Back wall (3 studs × 4 shelves) + back shelf side brackets |
+| **Total** | **83** | |
 
 ---
 
-## Key Achievements ✅
+## Coordinate Systems
 
-1. ✅ **Exact tangent circle geometry** - Dual-sinusoid corner solver working perfectly
-2. ✅ **Arc direction auto-detection** - Handles B59 anomaly (fixed Jan 2026)
-3. ✅ **25-piece full pantry** - All shelves generated with exact geometry
-4. ✅ **SVG-based workflow** - Single source of truth for geometry
-5. ✅ **Photorealistic rendering** - Blender + Cycles with realistic materials
-6. ✅ **Plywood packing optimization** - 5 sheets for all 25 pieces
-7. ✅ **Kitchen corner variant** - Separate project using similar techniques
+Two coordinate systems are in use. Be careful at boundaries.
+
+| Context | X origin | Y origin | Y direction |
+|---|---|---|---|
+| Pantry / DXF | NW corner (door-left) | same | South = +Y (door→back) |
+| SVG / nesting UI | sheet top-left | same | Down = +Y |
+
+**Pantry walls:**
+- East = left wall (x = 0)
+- West = right wall (x = 48)
+- South = back wall (y = 49)
+- North = door wall (y = 0)
 
 ---
 
-## Experimental Features (Not Production-Ready)
+## Key Algorithms
 
-### Gaussian Process (GP/Kriging) Curves
-**Status**: ⚠️ NOT WORKING - Development paused
+**Tangent circle at back corners** (`geometry.py`):
+Finds a circle tangent to two sinusoidal curves simultaneously using scipy `minimize`
+with gradient constraints. Falls back to Newton's method for degenerate cases.
 
-**Scripts:**
-- `scripts/generate_kitchen_corner_shelves_kriging.py` - GP-based kitchen shelves
-- `scripts/test_gp_curve.py` - GP curve testing and visualization
+**Door smoothing arc** (`alt_9.py` / `generate_from_patterns.py`):
+Rotation-based solver — rotates the sinusoid until it's horizontal, solves for the
+tangent arc analytically, then rotates back.
 
-**Concept:**
-- Replace sinusoids with Gaussian process random curves
-- Kriging with hard observations at endpoints
-- Derivative constraints for slope matching
-- Smoothness regularization (standard deviation ≤ 1")
-
-**Issues:**
-- Intersection solving more complex than sinusoids
-- Arc tangency calculation needs refinement
-- Current implementation produces artifacts
-
-**Files preserved for future development.**
+**Gap polishing** (`nest_from_inkscape.py:polish_layout`):
+Freeze shelves with structural overlaps (area > 1 sq.in.). Detect "squeezed" free
+shelves where opposing forces cancel (net < 20% of total). Apply symmetric force
+vectors to remaining free shelves, capped at 0.75"/pass, for up to 200 passes.
 
 ---
 
 ## Dependencies
 
-### Python Packages
 ```bash
-pip install numpy scipy matplotlib
+pip install numpy scipy matplotlib shapely ezdxf
 ```
 
-- **numpy**: Mathematical operations, sinusoid calculations
-- **scipy**: Optimization for tangent circle solving
-- **matplotlib**: 2D visualizations, PDF generation
-
-### Blender
-- **Version**: Blender 4.5+ (with Python 3.11)
-- **Engine**: Cycles ray tracing
-- **Required**: `bpy` (Blender Python API, included with Blender)
+Blender 4.5+ required only for photorealistic renders.
 
 ---
 
-## Troubleshooting
-
-### Issue: Arc points in wrong order (self-intersecting path)
-**Symptom**: Back shelf SVG shows artifact, polygon crosses itself
-**Cause**: Arc generated in opposite direction (point1→point2 vs point2→point1)
-**Solution**: Fixed in `extract_and_export_geometry.py` line 432 - auto-detects arc direction
-**Affected**: Only shelf B59 (level 2), now handled automatically
-
-### Issue: Blender renders are all black
-**Symptom**: Rendered images are pure black
-**Cause**: Missing materials or incorrect lighting setup
-**Solution**: Use `render_from_svg.py` (not old render scripts) - includes proper materials
-
-### Issue: SVG files don't load in laser cutter software
-**Symptom**: Software reports invalid path or won't import
-**Cause**: Path not closed or self-intersecting polygon
-**Solution**: Verify with `scripts/verify_geometry.py`, check polygon vertex order
-
----
-
-## Known Limitations
-
-1. **Fixed plywood size**: Packing assumes 96" × 48" sheets
-2. **No kerf compensation**: SVG dimensions don't account for laser/saw blade width
-3. **Single material**: Only Baltic birch texture implemented
-4. **No structural analysis**: Load capacity, sagging not calculated
-5. **Manual assembly**: No automated joinery or fastener placement
-
----
-
-## Future Enhancements
-
-### Short-term
-- [ ] Kerf compensation parameter in config
-- [ ] Alternative plywood sizes (48" × 96", 60" × 120")
-- [ ] Dimension annotations on SVG files
-- [ ] Assembly instructions PDF
-
-### Long-term
-- [ ] Web-based 3D viewer (Three.js)
-- [ ] Structural FEA analysis (sagging simulation)
-- [ ] CNC G-code generation
-- [ ] Cost estimation with material pricing
-- [ ] Joinery design (dados, rabbets)
-- [ ] Multiple material options
-
-### Research
-- [ ] Fix GP/kriging curve implementation
-- [ ] Multi-harmonic sinusoids (Fourier series)
-- [ ] Bézier curve edges
-- [ ] Topology optimization for weight reduction
-
----
-
-## Recent Updates
-
-### January 2026
-- ✅ **NEW: Pantry layout PDF** - Assembly guide showing all shelves in position with color coding (17 pages)
-- ✅ **NEW: Construction-based geometry system** - All shelves specified as sequences of geometric primitives in JSON
-- ✅ **NEW: alt_9.py door smoothing solver** - Rotation-based approach for precise tangent arc computation
-- ✅ Created `shelf_level_patterns.json` - Data-driven shelf configuration with base geometry and construction templates
-- ✅ Full pipeline implementation: parser → solver → renderer → exporter (SVG/DXF/PDF)
-- ✅ Template inheritance system for intermediate shelves (reduces JSON duplication)
-- ✅ Documented construction-based development philosophy in README
-- ✅ Fixed B59 back shelf arc direction anomaly
-- ✅ Updated right wall depth: 4" → 5"
-- ✅ Moved deprecated scripts to `scripts/old/`
-- ✅ Consolidated workflow to SVG-based rendering
-- ✅ Updated README with complete current documentation
-
-### December 2025
-- ✅ Implemented exact SVG export workflow
-- ✅ Created kitchen corner shelf variant
-- ✅ Added GP/kriging curve experimentation (incomplete)
-- ✅ Optimized plywood packing (25 pieces → 5 sheets)
-
----
-
-## Credits
-
-**Design & Implementation**: Procedurally generated using Claude (Anthropic)
-**Geometric Solver**: Custom tangent circle algorithm with scipy optimization
-**Rendering**: Blender 4.5 + Cycles ray tracing engine
-**Material Textures**: Procedural Baltic birch (custom shader nodes)
-
----
-
-## License
-
-This project is for personal use. The generated shelf designs are unique to your pantry dimensions.
-
----
-
-**Last updated**: January 2, 2026
-**Config version**: pantry_0002.json
-**Status**: Production-ready ✅
+**Last updated**: March 2026
