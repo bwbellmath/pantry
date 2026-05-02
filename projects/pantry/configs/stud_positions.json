@@ -1,40 +1,52 @@
 {
   "description": "Stud center positions and bracket configurations for mounting brackets.",
   "notes": [
-    "All measurements in inches",
-    "Brackets will be centered on stud positions",
-    "tongue_length is the stem that extends into the shelf (for router inset)",
-    "Standard 2x4 stud is 1.5\" wide"
+    "All measurements in inches.",
+    "stud_centers_* arrays hold RAW stud positions (no bracket-offset baked in).",
+    "Bracket center = stud + stud_offset_sign * (base_width/2 - screw_hole_inset).",
+    "tongue_length is the portion of the bracket routed into the shelf.",
+    "Standard 2x4 stud is 1.5\" wide."
   ],
 
   "bracket_bom": {
     "description": "Total bracket count by tongue length across all 25 shelves",
-    "note": "tongue_length is the portion routed into the shelf; base plate is always 3.2\" wide x 0.2\" thick",
+    "note": "tongue_length is the portion routed into the shelf; base width varies by tongue length",
     "4_inch":  { "tongue_length_in": 4,  "count": 47, "used_for": "right wall (3 studs × 10 R-shelves) + back shelf corner brackets (2 × 4 B-shelves)" },
     "6_inch":  { "tongue_length_in": 6,  "count": 16, "used_for": "left wall (2 studs × 8 L-shelves)" },
     "10_inch": { "tongue_length_in": 10, "count": 20, "used_for": "back wall (3 studs × 4 B-shelves) + back shelf side brackets (2 × 4 B-shelves)" },
     "total": 83
   },
 
-  "bracket_base_width": 3.2,
-  "bracket_base_height": 0.2,
-  "bracket_stem_width": 1.6,
+  "bracket_geometry": {
+    "base_height":        0.2,
+    "stem_width":         1.615,
+    "base_corner_radius": 0.5,
+    "dogbone_radius":     0.25,
+    "screw_hole_inset":   0.375,
+    "by_tongue_length": {
+      "4":  { "base_width": 3.215 },
+      "6":  { "base_width": 3.215 },
+      "10": { "base_width": 3.975 }
+    }
+  },
 
   "right_wall": {
-    "description": "Right/West wall (x=48), studs listed by Y-position from door",
+    "description": "Right/West wall (x=48), raw stud Y-positions from door.",
     "wall_x": 48.0,
     "tongue_length": 4.0,
+    "stud_offset_sign": 1,
     "stud_centers_y": [
-      5.175,
+      3.25,
       16.675,
       25.825
     ]
   },
 
   "left_wall": {
-    "description": "Left/East wall (x=0), studs listed by Y-position from door",
+    "description": "Left/East wall (x=0), raw stud Y-positions from door.",
     "wall_x": 0.0,
     "tongue_length": 6.0,
+    "stud_offset_sign": 1,
     "stud_centers_y": [
       7.55,
       22.0
@@ -42,29 +54,31 @@
   },
 
   "back_wall": {
-    "description": "Back/South wall (y=49), studs listed by X-position from left corner, shifted +1.8 right",
+    "description": "Back/South wall (y=49), raw stud X-positions from left corner.",
     "wall_y": 49.0,
     "tongue_length": 10.0,
+    "stud_offset_sign": 1,
     "stud_centers_x": [
-      7.175,
-      22.8,
-      39.05
+      5.375,
+      21.0,
+      37.25
     ]
   },
 
   "back_shelf_side_brackets": {
-    "description": "Side support brackets for back shelves, mounted to left/right walls",
+    "description": "Side support brackets for back shelves, mounted to left/right walls. stud_y is the raw stud position; shifts forward by sign * (base_width/2 - screw_hole_inset) to clear back-wall bracket tongues.",
     "enabled": true,
     "tongue_length": 10.0,
-    "y_position": 36.2,
-    "note": "y_position is 12.8 inches from back wall (49 - 12.8 = 36.2), shifted 1.8 forward to avoid back wall brackets"
+    "stud_offset_sign": -1,
+    "stud_y": 38.0
   },
 
   "back_shelf_corner_brackets": {
-    "description": "Corner brackets for back shelves, screwed into hidden corner studs for extra stability",
+    "description": "Corner brackets for back shelves, screwed into hidden corner studs. Bracket sits flush against back wall; bracket_y = back_wall_y - base_width/2 (independent of screw_hole_inset).",
     "enabled": true,
     "tongue_length": 4.0,
-    "left_corner": {"x": 0.0, "y": 47.4},
-    "right_corner": {"x": 48.0, "y": 47.4}
+    "back_wall_y": 49.0,
+    "left_corner_stud_x": 0.0,
+    "right_corner_stud_x": 48.0
   }
 }

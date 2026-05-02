@@ -43,18 +43,54 @@ from ezdxf import units
 SHEET_W = 96.0
 SHEET_H = 48.0
 
-BASE_HEIGHT    = 0.2    # bracket base plate depth (into shelf from wall)
-BASE_WIDTH     = 3.2    # bracket base plate width (along wall, centered on stud)
-STEM_WIDTH     = 1.6    # bracket tongue width
-BASE_R         = 0.5    # outer corner arc radius at wall entry
-DOGBONE_R      = 0.25   # dogbone relief radius at tongue tip corners
-POCKET_EXTEND  = 0.38   # how far past tongue tip the pocket extends to close
+# Universal bracket constants (loaded from stud_positions.json bracket_geometry block).
+# Per-bracket base_width and stem_width are NOT global — they vary per tongue length
+# and are inferred from each bracket's polygon (see _measure_base_width / cut_pts length).
+BASE_HEIGHT = BASE_R = DOGBONE_R = 0.0
+_wcy = CHORD_HALF = 0.0
 
-# chord_half: where the wall-entry arc crosses y=0 (x-offset from base edge)
-_wcy       = BASE_HEIGHT - BASE_R          # arc center y (= -0.3)
-CHORD_HALF = math.sqrt(BASE_R**2 - _wcy**2)   # ≈ 0.4"
+POCKET_EXTEND  = 0.38   # how far past tongue tip the pocket extends to close (CNC param)
+WALL_TOL = 0.05         # tolerance for "is this point on the wall edge"
 
-WALL_TOL = 0.05   # tolerance for "is this point on the wall edge"
+
+def _load_bracket_geometry(project='pantry'):
+    """Load bracket physical dimensions from a project's stud_positions.json."""
+    cfg_path = Path(__file__).parent.parent / 'projects' / project / 'configs' / 'stud_positions.json'
+    with open(cfg_path) as f:
+        return json.load(f)
+
+
+def _set_bracket_globals(cfg):
+    """Initialize/refresh module-level bracket constants from the config dict."""
+    global BASE_HEIGHT, BASE_R, DOGBONE_R, _wcy, CHORD_HALF
+    g = cfg['bracket_geometry']
+    BASE_HEIGHT = g['base_height']
+    BASE_R      = g['base_corner_radius']
+    DOGBONE_R   = g['dogbone_radius']
+    _wcy        = BASE_HEIGHT - BASE_R
+    CHORD_HALF  = math.sqrt(BASE_R**2 - _wcy**2)
+
+
+# Initialize from default project; main() reloads if --project is overridden.
+_set_bracket_globals(_load_bracket_geometry('pantry'))
+
+
+def _measure_base_width(brk_pts, cut_pts):
+    """Infer this bracket's base_width from its polygon + cut line.
+    The polygon's u-axis extent (along the cut line direction) at the wall edge
+    is base_width/2 + CHORD_HALF on each side."""
+    c1, c2 = cut_pts[0], cut_pts[1]
+    mx, my = (c1[0] + c2[0]) / 2, (c1[1] + c2[1]) / 2
+    dx, dy = c2[0] - c1[0], c2[1] - c1[1]
+    L = math.hypot(dx, dy)
+    ux, uy = dx / L, dy / L
+    max_u, min_u = -1e9, 1e9
+    for p in brk_pts:
+        proj = (p[0] - mx) * ux + (p[1] - my) * uy
+        if proj > max_u: max_u = proj
+        if proj < min_u: min_u = proj
+    half_span = (max_u - min_u) / 2.0
+    return 2.0 * (half_span - CHORD_HALF)
 
 LAYER_CONTOUR = "CONTOUR"
 LAYER_POCKET  = "POCKET"
@@ -126,15 +162,16 @@ def seg_param(a, b, p, tol=0.02):
 
 # ── Bracket-base U-shape construction ────────────────────────────────────────
 
-def bracket_entry_points(cut_pts_dxf, shelf_type):
+def bracket_entry_points(cut_pts_dxf, shelf_type, base_width):
     """
     Compute the two wall-edge entry/exit points of the bracket base slot,
     in DXF sheet coords.
 
     cut_pts_dxf: [(x1,y1),(x2,y2)] — the armpit cut line, already in DXF coords.
+    base_width:  this bracket's base width (varies per tongue length).
 
     The armpit midpoint is the stud center projected onto the wall face + base_height.
-    The wall-edge points are base_height further out, ±(BASE_WIDTH/2 + CHORD_HALF)
+    The wall-edge points are base_height further out, ±(base_width/2 + CHORD_HALF)
     from the stud center along the wall.
     """
     (x1, y1), (x2, y2) = cut_pts_dxf
@@ -165,7 +202,7 @@ def bracket_entry_points(cut_pts_dxf, shelf_type):
     # we return both and let the caller pick based on shelf polygon wall edge.
     # Actually: we can determine it from the shelf bbox later. Return both candidates.
 
-    half_span = BASE_WIDTH / 2 + CHORD_HALF   # = 2.0"
+    half_span = base_width / 2 + CHORD_HALF
 
     # Wall entry/exit points (before we know which perpendicular direction is outward)
     # The two wall-edge points are ±half_span along the wall from the stud center,
@@ -573,7 +610,10 @@ def make_pocket_polygon(cut_pts_dxf, bracket_pts_dxf, shelf_type, bbox_local):
     def to_dxf(u, v):
         return (mx + u * ux + v * nx, my + u * uy + v * ny)
 
-    hw = STEM_WIDTH / 2   # 0.8
+    # Per-bracket stem width: the cut line spans the two armpit corners, distance = stem_width
+    stem_width = math.hypot(cut_pts_dxf[1][0] - cut_pts_dxf[0][0],
+                            cut_pts_dxf[1][1] - cut_pts_dxf[0][1])
+    hw = stem_width / 2
 
     # Dogbone parameters (matching reference: generate_shelves_with_brackets.py)
     R  = DOGBONE_R                  # 0.25"
@@ -696,8 +736,11 @@ def process_shelf(item, geom_entry, msp_contour, msp_pocket):
             continue
         ux, uy = dx/L, dy/L
 
+        # Per-bracket base_width inferred from the polygon (varies per tongue length)
+        base_width = _measure_base_width(brk_pts, cut_pts)
+
         # Two perpendicular candidates for "wall outward" direction
-        cands = bracket_entry_points(cut_pts, shelf_type)
+        cands = bracket_entry_points(cut_pts, shelf_type, base_width)
         if not cands:
             continue
 
@@ -820,6 +863,9 @@ def main():
     parser.add_argument('layout', nargs='?', help='Path to nesting_layout.json (optional)')
     parser.add_argument('--project', default='pantry', help='Project name (default: pantry)')
     args = parser.parse_args()
+
+    if args.project != 'pantry':
+        _set_bracket_globals(_load_bracket_geometry(args.project))
 
     repo_root = Path(__file__).parent.parent
     project_dir = repo_root / 'projects' / args.project

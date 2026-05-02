@@ -8,6 +8,7 @@ Edit configs/stud_positions.json with exact measurements, then run this script.
 import ezdxf
 from ezdxf import units
 from pathlib import Path
+import sys
 import numpy as np
 import json
 import re
@@ -15,6 +16,11 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import Polygon, Patch
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'lib'))
+from bracket_geometry import (
+    bracket_dims, stud_to_bracket_offset, corner_bracket_offset,
+)
 
 # =============================================================================
 # BRACKET GEOMETRY FUNCTIONS
@@ -134,10 +140,12 @@ def create_bracket_cut_line(base_width, base_height, stem_width):
         [stem_right, base_height],
     ])
 
-# Dogbone relief at tongue tip corners: 0.5" diameter for a 3/8" end mill.
-DOGBONE_RADIUS = 0.25  # inches (radius; diameter = 0.5")
-# Fillet radius at armpit corners (base meets tongue): must be ≥ tool radius (3/16").
-BASE_CORNER_RADIUS = 0.5  # inches
+# Fallback defaults — the canonical values live in configs/stud_positions.json
+# (bracket_dogbone_radius, bracket_base_corner_radius). place_bracket() loads
+# them from config and passes them through; these defaults only apply if
+# create_bracket_outline is called without explicit radii.
+DOGBONE_RADIUS = 0.25       # 0.5" diameter for a 3/8" end mill
+BASE_CORNER_RADIUS = 0.5    # must be ≥ tool radius (3/16")
 
 def mirror_x_pts(pts, width):
     """Mirror points about X = width/2 (reflect left↔right).
@@ -172,10 +180,6 @@ def place_bracket(stud_center_x, stud_center_y, wall_side, config):
     Returns: (outline_points, cut_line_points)
       outline_points includes dogbone relief geometry at the tongue tip corners.
     """
-    base_width = config['bracket_base_width']
-    base_height = config['bracket_base_height']
-    stem_width = config['bracket_stem_width']
-
     # Get tongue length based on wall side
     if wall_side == 'right':
         tongue_length = config['right_wall']['tongue_length']
@@ -190,8 +194,13 @@ def place_bracket(stud_center_x, stud_center_y, wall_side, config):
     else:
         tongue_length = 6.0  # default
 
-    outline = create_bracket_outline(base_width, base_height, stem_width, tongue_length)
-    cut_line = create_bracket_cut_line(base_width, base_height, stem_width)
+    d = bracket_dims(config, tongue_length)
+    base_width = d['base_width']
+
+    outline = create_bracket_outline(base_width, d['base_height'], d['stem_width'], tongue_length,
+                                     dogbone_radius=d['dogbone_radius'],
+                                     base_corner_radius=d['base_corner_radius'])
+    cut_line = create_bracket_cut_line(base_width, d['base_height'], d['stem_width'])
 
     # Center bracket on origin
     outline[:, 0] -= base_width / 2
@@ -255,7 +264,7 @@ def main():
     print(f"  Left wall:  {len(config['left_wall']['stud_centers_y'])} studs, {config['left_wall']['tongue_length']}\" tongue")
     print(f"  Back wall:  {len(config['back_wall']['stud_centers_x'])} studs, {config['back_wall']['tongue_length']}\" tongue")
     if config['back_shelf_side_brackets']['enabled']:
-        print(f"  Back shelf side brackets: enabled, {config['back_shelf_side_brackets']['tongue_length']}\" tongue at y={config['back_shelf_side_brackets']['y_position']}")
+        print(f"  Back shelf side brackets: enabled, {config['back_shelf_side_brackets']['tongue_length']}\" tongue at stud_y={config['back_shelf_side_brackets']['stud_y']}")
 
     # Layout parameters
     PANTRY_WIDTH = 48.0
@@ -298,6 +307,32 @@ def main():
 
     # Store bracket data for PDF generation
     all_brackets = {}
+
+    # Raw stud positions for PDF markers (same for every level — the studs don't move).
+    # axis: 'x' or 'y' — which coordinate is the meaningful stud position along its wall.
+    # label_pos: 'left'|'right'|'above'|'below' — where to anchor the text relative to the marker.
+    stud_markers = []
+    for sx in config['back_wall']['stud_centers_x']:
+        stud_markers.append({'x': sx, 'y': config['back_wall']['wall_y'],
+                             'axis': 'x', 'label_pos': 'above'})
+    for sy in config['left_wall']['stud_centers_y']:
+        stud_markers.append({'x': config['left_wall']['wall_x'], 'y': sy,
+                             'axis': 'y', 'label_pos': 'left'})
+    for sy in config['right_wall']['stud_centers_y']:
+        stud_markers.append({'x': config['right_wall']['wall_x'], 'y': sy,
+                             'axis': 'y', 'label_pos': 'right'})
+    if config.get('back_shelf_side_brackets', {}).get('enabled', False):
+        bs = config['back_shelf_side_brackets']
+        stud_markers.append({'x': config['left_wall']['wall_x'],  'y': bs['stud_y'],
+                             'axis': 'y', 'label_pos': 'left'})
+        stud_markers.append({'x': config['right_wall']['wall_x'], 'y': bs['stud_y'],
+                             'axis': 'y', 'label_pos': 'right'})
+    if config.get('back_shelf_corner_brackets', {}).get('enabled', False):
+        cc = config['back_shelf_corner_brackets']
+        stud_markers.append({'x': cc['left_corner_stud_x'],  'y': cc['back_wall_y'],
+                             'axis': 'x', 'label_pos': 'above'})
+        stud_markers.append({'x': cc['right_corner_stud_x'], 'y': cc['back_wall_y'],
+                             'axis': 'x', 'label_pos': 'above'})
 
     for level_idx, height in enumerate(sorted_heights):
         x_offset = level_idx * LEVEL_SPACING
@@ -345,8 +380,11 @@ def main():
 
             if wall_side == 'left':
                 wall_x = config['left_wall']['wall_x']
+                lw_off = stud_to_bracket_offset(config, config['left_wall']['tongue_length'],
+                                                config['left_wall'].get('stud_offset_sign', 0))
                 for stud_y in config['left_wall']['stud_centers_y']:
-                    outline, cut_line = place_bracket(wall_x, stud_y, 'left', config)
+                    bracket_y = stud_y + lw_off
+                    outline, cut_line = place_bracket(wall_x, bracket_y, 'left', config)
                     # Store for PDF (without DXF offset)
                     all_brackets[height].append({
                         'outline': outline.copy(),
@@ -365,8 +403,11 @@ def main():
 
             elif wall_side == 'right':
                 wall_x = config['right_wall']['wall_x']
+                rw_off = stud_to_bracket_offset(config, config['right_wall']['tongue_length'],
+                                                config['right_wall'].get('stud_offset_sign', 0))
                 for stud_y in config['right_wall']['stud_centers_y']:
-                    outline, cut_line = place_bracket(wall_x, stud_y, 'right', config)
+                    bracket_y = stud_y + rw_off
+                    outline, cut_line = place_bracket(wall_x, bracket_y, 'right', config)
                     all_brackets[height].append({
                         'outline': outline.copy(),
                         'wall': 'right'
@@ -384,8 +425,11 @@ def main():
 
             elif wall_side == 'back':
                 wall_y = config['back_wall']['wall_y']
+                bw_off = stud_to_bracket_offset(config, config['back_wall']['tongue_length'],
+                                                config['back_wall'].get('stud_offset_sign', 0))
                 for stud_x in config['back_wall']['stud_centers_x']:
-                    outline, cut_line = place_bracket(stud_x, wall_y, 'back', config)
+                    bracket_x = stud_x + bw_off
+                    outline, cut_line = place_bracket(bracket_x, wall_y, 'back', config)
                     all_brackets[height].append({
                         'outline': outline.copy(),
                         'wall': 'back'
@@ -403,7 +447,10 @@ def main():
 
                 # Add side support brackets for back shelves
                 if config['back_shelf_side_brackets']['enabled']:
-                    side_y = config['back_shelf_side_brackets']['y_position']
+                    bs = config['back_shelf_side_brackets']
+                    bs_off = stud_to_bracket_offset(config, bs['tongue_length'],
+                                                    bs.get('stud_offset_sign', 0))
+                    side_y = bs['stud_y'] + bs_off
 
                     # Left side support bracket
                     left_x = config['left_wall']['wall_x']
@@ -444,10 +491,10 @@ def main():
                 # Add corner brackets for back shelves
                 if config.get('back_shelf_corner_brackets', {}).get('enabled', False):
                     corner_cfg = config['back_shelf_corner_brackets']
+                    cb_y = corner_cfg['back_wall_y'] - corner_bracket_offset(config, corner_cfg['tongue_length'])
 
                     # Left corner bracket (facing right)
-                    lc = corner_cfg['left_corner']
-                    outline, cut_line = place_bracket(lc['x'], lc['y'], 'corner_left', config)
+                    outline, cut_line = place_bracket(corner_cfg['left_corner_stud_x'], cb_y, 'corner_left', config)
                     all_brackets[height].append({
                         'outline': outline.copy(),
                         'wall': 'corner_left'
@@ -464,8 +511,7 @@ def main():
                     shelf_brackets += 1
 
                     # Right corner bracket (facing left)
-                    rc = corner_cfg['right_corner']
-                    outline, cut_line = place_bracket(rc['x'], rc['y'], 'corner_right', config)
+                    outline, cut_line = place_bracket(corner_cfg['right_corner_stud_x'], cb_y, 'corner_right', config)
                     all_brackets[height].append({
                         'outline': outline.copy(),
                         'wall': 'corner_right'
@@ -573,6 +619,29 @@ def main():
                 )
                 ax.add_patch(bracket_patch)
 
+            # Draw stud-center markers (raw pantry coords — shelves & brackets are
+            # already in pantry coords here, no mirror needed).
+            label_offsets = {
+                'above': (0,  0.6, 'center', 'bottom'),
+                'below': (0, -0.6, 'center', 'top'),
+                'left':  (-0.6, 0, 'right',  'center'),
+                'right': ( 0.6, 0, 'left',   'center'),
+            }
+            for s in stud_markers:
+                sx, sy = s['x'], s['y']
+                ax.plot(sx, sy, marker='+', color='black', markersize=10,
+                        markeredgewidth=1.5, zorder=5)
+                ax.plot(sx, sy, marker='o', markerfacecolor='none',
+                        markeredgecolor='black', markersize=6, markeredgewidth=1.0, zorder=5)
+                # Label with the meaningful coordinate
+                value = sx if s['axis'] == 'x' else sy
+                dx, dy, ha, va = label_offsets[s['label_pos']]
+                ax.text(sx + dx, sy + dy, f"{s['axis']}={value:.3f}",
+                        ha=ha, va=va, fontsize=7, color='black',
+                        bbox=dict(boxstyle='round,pad=0.15', facecolor='white',
+                                  edgecolor='gray', linewidth=0.5, alpha=0.85),
+                        zorder=6)
+
             # Title
             ax.set_title(f'Level: {height}" from floor\n({len(shelf_polygons[height])} shelves, {len(all_brackets[height])} brackets)',
                         fontsize=14, fontweight='bold', pad=20)
@@ -586,11 +655,14 @@ def main():
             ax.set_ylabel('Depth (inches)', fontsize=10)
 
             # Legend
+            from matplotlib.lines import Line2D
             legend_elements = [
                 Patch(facecolor=shelf_colors['L'], edgecolor='black', label='Left (East)'),
                 Patch(facecolor=shelf_colors['R'], edgecolor='black', label='Right (West)'),
                 Patch(facecolor=shelf_colors['B'], edgecolor='black', label='Back (South)'),
                 Patch(facecolor=bracket_color, edgecolor='black', alpha=0.6, label='Brackets'),
+                Line2D([0], [0], marker='+', color='black', markersize=10, markeredgewidth=1.5,
+                       linestyle='', label='Stud center'),
             ]
             ax.legend(handles=legend_elements, loc='upper right', fontsize=9)
 

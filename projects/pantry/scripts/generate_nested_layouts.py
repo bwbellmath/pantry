@@ -16,7 +16,9 @@ import shapely.affinity as affinity
 
 script_dir = Path(__file__).parent
 sys.path.append(str(script_dir))
+sys.path.insert(0, str(script_dir.parent.parent.parent / 'lib'))
 import generate_shelves_with_brackets as gswb
+import bracket_geometry as bg
 
 SHEET_WIDTH = 96.0  # X-axis
 SHEET_HEIGHT = 48.0 # Y-axis
@@ -187,8 +189,10 @@ def load_shelves(project_dir=None):
             if shelf_type == 'L':
                 wall_side = 'left'
                 wall_x = config['left_wall']['wall_x']
+                lw_off = bg.stud_to_bracket_offset(config, config['left_wall']['tongue_length'],
+                                                   config['left_wall'].get('stud_offset_sign', 0))
                 for stud_y in config['left_wall']['stud_centers_y']:
-                    outline, cut_line = gswb.place_bracket(wall_x, stud_y, 'left', config)
+                    outline, cut_line = gswb.place_bracket(wall_x, stud_y + lw_off, 'left', config)
                     outline = gswb.mirror_x_pts(outline, PANTRY_WIDTH)
                     cut_line = gswb.mirror_x_pts(cut_line, PANTRY_WIDTH)
                     bracket_lines.append(outline)
@@ -196,8 +200,10 @@ def load_shelves(project_dir=None):
             elif shelf_type == 'R':
                 wall_side = 'right'
                 wall_x = config['right_wall']['wall_x']
+                rw_off = bg.stud_to_bracket_offset(config, config['right_wall']['tongue_length'],
+                                                   config['right_wall'].get('stud_offset_sign', 0))
                 for stud_y in config['right_wall']['stud_centers_y']:
-                    outline, cut_line = gswb.place_bracket(wall_x, stud_y, 'right', config)
+                    outline, cut_line = gswb.place_bracket(wall_x, stud_y + rw_off, 'right', config)
                     outline = gswb.mirror_x_pts(outline, PANTRY_WIDTH)
                     cut_line = gswb.mirror_x_pts(cut_line, PANTRY_WIDTH)
                     bracket_lines.append(outline)
@@ -205,35 +211,39 @@ def load_shelves(project_dir=None):
             elif shelf_type == 'B':
                 wall_side = 'back'
                 wall_y = config['back_wall']['wall_y']
+                bw_off = bg.stud_to_bracket_offset(config, config['back_wall']['tongue_length'],
+                                                   config['back_wall'].get('stud_offset_sign', 0))
                 for stud_x in config['back_wall']['stud_centers_x']:
-                    outline, cut_line = gswb.place_bracket(stud_x, wall_y, 'back', config)
+                    outline, cut_line = gswb.place_bracket(stud_x + bw_off, wall_y, 'back', config)
                     outline = gswb.mirror_x_pts(outline, PANTRY_WIDTH)
                     cut_line = gswb.mirror_x_pts(cut_line, PANTRY_WIDTH)
                     bracket_lines.append(outline)
                     bracket_cuts.append(cut_line)
-                    
+
                 if config['back_shelf_side_brackets']['enabled']:
-                    side_y = config['back_shelf_side_brackets']['y_position']
+                    bs = config['back_shelf_side_brackets']
+                    side_y = bs['stud_y'] + bg.stud_to_bracket_offset(config, bs['tongue_length'],
+                                                                      bs.get('stud_offset_sign', 0))
                     outline, cut_line = gswb.place_bracket(config['left_wall']['wall_x'], side_y, 'back_left_support', config)
                     outline, cut_line = gswb.mirror_x_pts(outline, PANTRY_WIDTH), gswb.mirror_x_pts(cut_line, PANTRY_WIDTH)
                     bracket_lines.append(outline)
                     bracket_cuts.append(cut_line)
-                    
+
                     outline, cut_line = gswb.place_bracket(config['right_wall']['wall_x'], side_y, 'back_right_support', config)
                     outline, cut_line = gswb.mirror_x_pts(outline, PANTRY_WIDTH), gswb.mirror_x_pts(cut_line, PANTRY_WIDTH)
                     bracket_lines.append(outline)
                     bracket_cuts.append(cut_line)
-                    
+
                 if config.get('back_shelf_corner_brackets', {}).get('enabled', False):
                     corner_cfg = config['back_shelf_corner_brackets']
-                    lc = corner_cfg['left_corner']
-                    outline, cut_line = gswb.place_bracket(lc['x'], lc['y'], 'corner_left', config)
+                    cb_y = corner_cfg['back_wall_y'] - bg.corner_bracket_offset(config, corner_cfg['tongue_length'])
+
+                    outline, cut_line = gswb.place_bracket(corner_cfg['left_corner_stud_x'], cb_y, 'corner_left', config)
                     outline, cut_line = gswb.mirror_x_pts(outline, PANTRY_WIDTH), gswb.mirror_x_pts(cut_line, PANTRY_WIDTH)
                     bracket_lines.append(outline)
                     bracket_cuts.append(cut_line)
-                    
-                    rc = corner_cfg['right_corner']
-                    outline, cut_line = gswb.place_bracket(rc['x'], rc['y'], 'corner_right', config)
+
+                    outline, cut_line = gswb.place_bracket(corner_cfg['right_corner_stud_x'], cb_y, 'corner_right', config)
                     outline, cut_line = gswb.mirror_x_pts(outline, PANTRY_WIDTH), gswb.mirror_x_pts(cut_line, PANTRY_WIDTH)
                     bracket_lines.append(outline)
                     bracket_cuts.append(cut_line)
