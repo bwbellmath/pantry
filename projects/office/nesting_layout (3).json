@@ -1,0 +1,86 @@
+{
+  "sheets": [
+    {
+      "id": 1,
+      "shelves": [
+        {
+          "name": "left_extra",
+          "x": 46.1196,
+          "y": 22.3342,
+          "rotation": 1
+        },
+        {
+          "name": "right_extra",
+          "x": 47.0771,
+          "y": 18.2646,
+          "rotation": 3
+        },
+        {
+          "name": "x_main",
+          "x": 46.4117,
+          "y": 31.8357,
+          "rotation": 1
+        },
+        {
+          "name": "y_main",
+          "x": 46.3848,
+          "y": 43.0259,
+          "rotation": 1
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "shelves": [
+        {
+          "name": "shelf_0",
+          "x": 79.2701,
+          "y": 10.4441,
+          "rotation": 2
+        },
+        {
+          "name": "shelf_1",
+          "x": 33.694,
+          "y": 13.6212,
+          "rotation": 2
+        },
+        {
+          "name": "shelf_2",
+          "x": 56.6117,
+          "y": 11.9422,
+          "rotation": 2
+        },
+        {
+          "name": "shelf_3",
+          "x": 16.6176,
+          "y": 37.7912,
+          "rotation": 0
+        },
+        {
+          "name": "shelf_4",
+          "x": 72.5763,
+          "y": 27.0893,
+          "rotation": 1
+        },
+        {
+          "name": "shelf_5",
+          "x": 49.8568,
+          "y": 28.8467,
+          "rotation": 1
+        },
+        {
+          "name": "shelf_6",
+          "x": 20.4923,
+          "y": 12.3058,
+          "rotation": 0
+        },
+        {
+          "name": "shelf_7",
+          "x": 18.6722,
+          "y": 25.095,
+          "rotation": 0
+        }
+      ]
+    }
+  ]
+}

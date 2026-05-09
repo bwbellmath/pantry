@@ -1,0 +1,47 @@
+{
+  "description": "Office shelves: 8 shelves around a corner dihedral, 2 main interlocking verticals (around the dihedral), 2 sinusoidal extra supports.",
+  "units": "inches",
+
+  "stock_thickness": 0.923,
+  "_stock_thickness_note": "Measured actual stock.",
+
+  "dogbone_diameter": 0.38,
+  "dogbone_radius":   0.19,
+  "_dogbone_note":    "3/8\" endmill (0.375) + 0.005\" tolerance.",
+
+  "dihedral": {
+    "x_extent": 11.3125,
+    "y_extent": 7.75
+  },
+
+  "shelf": {
+    "main_x_inset": 11.625,
+    "right_outer_x_offset": 9.125,
+    "back_y_inset": 11.875,
+    "main_inset_step": 1.75,
+    "outer_arc_radius": 4.0,
+    "_outer_arc_radius_note": "PLACEHOLDER — geometry of the outer 3-arc curve still being clarified."
+  },
+
+  "extra_supports": {
+    "nominal_width": 4.0,
+    "sinusoid_amplitude": 1.0,
+    "sinusoid_period": 36.0,
+    "right_phase_radians": 0.0,
+    "left_phase_radians":  3.141592653589793,
+    "_phase_note": "Right and left phases differ by π so the two profiles are inversions; together they tile."
+  },
+
+  "main_supports": {
+    "tab_distance_fraction": 0.3333333333,
+    "_tabs_note": "Between consecutive shelves the interlock alternates: x-tab, y-tab, x-tab (or y, x, y) at fractions 1/3, 2/3, etc., past stock-thickness extension with dogbone interior corners."
+  },
+
+  "shelves": {
+    "first_height": 0.0,
+    "second_height_factor": 1.2,
+    "subsequent_separation": 11.625,
+    "count": 8,
+    "_height_note": "shelf 0 at first_height; shelf 1 at second_height_factor*subsequent_separation; shelves 2..7 each 11.625\" above PREVIOUS shelf TOP."
+  }
+}
