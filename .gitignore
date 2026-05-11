@@ -25,3 +25,8 @@ ENV/
 *.tmp
 *.bak
 *~
+
+# Node/Firebase local artifacts
+node_modules/
+.firebase/
+firebase-debug.log

@@ -1,0 +1,26 @@
+{
+  "hosting": {
+    "public": ".",
+    "ignore": [
+      "firebase.json",
+      ".firebaserc",
+      "firebase-debug.log",
+      "**/.*",
+      "**/__pycache__/**",
+      "*.py",
+      "nesting_ui.html"
+    ],
+    "cleanUrls": true,
+    "trailingSlash": false,
+    "rewrites": [
+      {
+        "source": "/",
+        "destination": "/sbp_speed_ui.html"
+      },
+      {
+        "source": "/shopbot-speed-a83k9q4m",
+        "destination": "/sbp_speed_ui.html"
+      }
+    ]
+  }
+}
