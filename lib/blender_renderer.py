@@ -1,10 +1,20 @@
 """
-3D rendering of pantry shelves using Blender Python API.
+3D rendering library for furniture pieces using Blender Python API.
+
+Generic API (works with any furniture project):
+    read_dxf_polygon(path)          — read 2D polygon from DXF
+    build_furniture_geometry(...)   — assemble the geometry JSON structure
+    run_blender_render(...)         — invoke Blender as subprocess
+
+Pantry-specific class:
+    BlenderRenderer                 — original pantry shelf renderer
 """
 
 from __future__ import annotations
+import json
+import subprocess
 import numpy as np
-from typing import List, Tuple, Optional, Dict, Any, TYPE_CHECKING
+from typing import List, Tuple, Optional, Dict, Any, Union, TYPE_CHECKING
 from pathlib import Path
 
 try:
@@ -15,14 +25,93 @@ try:
 except ImportError:
     BLENDER_AVAILABLE = False
     bpy = None  # type: ignore
-    print("Warning: Blender Python API (bpy) not available. Run with Blender's Python interpreter.")
 
-import shelf_generator
-import config
+try:
+    import ezdxf as _ezdxf
+    EZDXF_AVAILABLE = True
+except ImportError:
+    EZDXF_AVAILABLE = False
 
-ShelfFootprint = shelf_generator.ShelfFootprint
-ShelfGenerator = shelf_generator.ShelfGenerator
-ShelfConfig = config.ShelfConfig
+try:
+    import shelf_generator
+    import config as _config
+    ShelfFootprint = shelf_generator.ShelfFootprint
+    ShelfGenerator = shelf_generator.ShelfGenerator
+    ShelfConfig = _config.ShelfConfig
+except ImportError:
+    pass
+
+
+# ── Generic furniture rendering API ──────────────────────────────────────────
+
+def read_dxf_polygon(dxf_path: Union[str, Path]) -> List[Tuple[float, float]]:
+    """Read the first LWPOLYLINE from a DXF file and return its (x,y) vertices."""
+    if not EZDXF_AVAILABLE:
+        raise ImportError("ezdxf is required to read DXF files: pip install ezdxf")
+    doc = _ezdxf.readfile(str(dxf_path))
+    for entity in doc.modelspace():
+        if entity.dxftype() == 'LWPOLYLINE':
+            return [(v[0], v[1]) for v in entity.vertices()]
+    raise ValueError(f"No LWPOLYLINE found in {dxf_path}")
+
+
+def build_furniture_geometry(
+    pieces: List[Dict],
+    renders: List[Dict],
+) -> Dict:
+    """
+    Assemble the geometry dict consumed by blender_render_furniture.py.
+
+    Each piece dict:
+        name        str            object name in Blender
+        polygon     [[u,v], ...]   2D vertices in local (u,v) space
+        origin      [x,y,z]        world position of local (0,0)
+        u_axis      [x,y,z]        world direction for local u
+        v_axis      [x,y,z]        world direction for local v
+        normal      [x,y,z]        extrusion direction (unit vector)
+        thickness   float          extrusion distance
+        material    str            'plywood' | 'wall'
+
+    Each render dict:
+        name            str        output filename stem
+        camera_location [x,y,z]
+        camera_target   [x,y,z]
+        fov_deg         float      horizontal FOV in degrees
+        resolution      [w,h]      optional, default [1920,1080]
+        samples         int        optional Cycles samples, default 64
+    """
+    return {'pieces': pieces, 'renders': renders}
+
+
+def run_blender_render(
+    geometry: Dict,
+    output_dir: Path,
+    blender_script: Optional[Path] = None,
+    blender_exe: str = 'blender',
+) -> List[Path]:
+    """
+    Write geometry JSON to a temp file and invoke Blender to render it.
+    Returns paths to the rendered PNG files.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if blender_script is None:
+        blender_script = Path(__file__).parent / 'blender_render_furniture.py'
+
+    geo_json = output_dir / '_furniture_geometry.json'
+    geo_json.write_text(json.dumps(geometry, indent=2))
+
+    cmd = [
+        blender_exe, '--background', '--python', str(blender_script),
+        '--', str(geo_json), str(output_dir),
+    ]
+    print(f"Running: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"Blender exited with code {result.returncode}")
+
+    return [output_dir / f"{r['name']}.png" for r in geometry['renders']]
 
 
 class BlenderRenderer:

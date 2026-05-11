@@ -1,0 +1,116 @@
+{
+  "format_version": 2,
+  "sheets": [
+    {
+      "id": 1,
+      "shelves": [
+        {
+          "name": "left_extra",
+          "x": 46.1196,
+          "y": 22.3342,
+          "rotation": 90,
+          "mirrored": false
+        },
+        {
+          "name": "right_extra",
+          "x": 47.0771,
+          "y": 18.2646,
+          "rotation": 270,
+          "mirrored": false
+        },
+        {
+          "name": "x_main",
+          "x": 46.4117,
+          "y": 31.8357,
+          "rotation": 90,
+          "mirrored": false
+        },
+        {
+          "name": "y_main",
+          "x": 46.3848,
+          "y": 43.0259,
+          "rotation": 90,
+          "mirrored": false
+        },
+        {
+          "name": "shelf_4",
+          "x": 108.5574,
+          "y": 46.8716,
+          "rotation": 90,
+          "mirrored": false
+        }
+      ],
+      "obstacles": []
+    },
+    {
+      "id": 2,
+      "shelves": [
+        {
+          "name": "shelf_0",
+          "x": 77.5188,
+          "y": 10.9824,
+          "rotation": 205,
+          "mirrored": false
+        },
+        {
+          "name": "shelf_1",
+          "x": 10.1312,
+          "y": 16.4472,
+          "rotation": 90,
+          "mirrored": true
+        },
+        {
+          "name": "shelf_2",
+          "x": 29.9175,
+          "y": 17.0251,
+          "rotation": 90,
+          "mirrored": true
+        },
+        {
+          "name": "shelf_3",
+          "x": 50.8427,
+          "y": 30.5412,
+          "rotation": 252,
+          "mirrored": true
+        },
+        {
+          "name": "shelf_5",
+          "x": 54.0758,
+          "y": 17.9466,
+          "rotation": 71,
+          "mirrored": true
+        },
+        {
+          "name": "shelf_6",
+          "x": 30.7356,
+          "y": 31.3311,
+          "rotation": 270,
+          "mirrored": true
+        },
+        {
+          "name": "shelf_7",
+          "x": 10.5526,
+          "y": 29.2667,
+          "rotation": 270,
+          "mirrored": true
+        }
+      ],
+      "obstacles": [
+        {
+          "x": 78.163,
+          "y": 26.6429,
+          "w": 12,
+          "h": 6,
+          "label": "Reserved"
+        },
+        {
+          "x": 65.6604,
+          "y": 17.8726,
+          "w": 30,
+          "h": 30,
+          "label": "Reserved"
+        }
+      ]
+    }
+  ]
+}

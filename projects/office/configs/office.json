@@ -3,7 +3,10 @@
   "units": "inches",
 
   "stock_thickness": 0.923,
-  "_stock_thickness_note": "Measured actual stock.",
+  "_stock_thickness_note": "Measured actual stock — shelf material.",
+
+  "vertical_stock_thickness": 0.8,
+  "_vertical_stock_thickness_note": "Vertical support stock thickness (separate from shelf stock).",
 
   "dogbone_diameter": 0.38,
   "dogbone_radius":   0.19,
@@ -41,7 +44,14 @@
     "first_height": 0.0,
     "second_height_factor": 1.2,
     "subsequent_separation": 11.625,
-    "count": 8,
-    "_height_note": "shelf 0 at first_height; shelf 1 at second_height_factor*subsequent_separation; shelves 2..7 each 11.625\" above PREVIOUS shelf TOP."
+    "count": 7,
+    "_height_note": "shelf 0 at first_height; shelf 1 at second_height_factor*subsequent_separation; shelves 2..6 each 11.625\" above PREVIOUS shelf TOP."
+  },
+
+  "right_arm_extension": {
+    "length": 18.0,
+    "_length_note": "Extra length past the right_extra support along the right arm (inches). 18\" = 1.5 ft.",
+    "height_limit": 27.5,
+    "_height_limit_note": "Only extend shelves whose top face is strictly below this height (inches)."
   }
 }

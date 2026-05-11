@@ -1,0 +1,1091 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SBP Speed Viewer</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  display: flex; flex-direction: column; height: 100vh;
+  font-family: monospace; font-size: 13px; background: #1a1a1a; color: #eee;
+}
+
+#toolbar {
+  display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+  background: #2a2a2a; border-bottom: 1px solid #444; flex-shrink: 0; flex-wrap: wrap;
+}
+.btn {
+  padding: 5px 11px; background: #3a3a3a; border: 1px solid #555; color: #ddd;
+  cursor: pointer; border-radius: 3px; font-family: monospace; font-size: 12px;
+}
+.btn:hover { background: #4a4a4a; }
+.btn.primary { background: #1a4a8a; border-color: #3a6aaa; }
+.btn.primary:hover { background: #2a5a9a; }
+.sep { width: 1px; height: 24px; background: #444; margin: 0 2px; }
+label { font-size: 12px; color: #ccc; display: inline-flex; align-items: center; gap: 4px; }
+input[type="number"] {
+  width: 64px; background: #333; color: #eee; border: 1px solid #555;
+  padding: 2px 4px; font-family: monospace; font-size: 12px;
+}
+#status { flex: 1; color: #aaa; font-size: 12px; min-width: 220px; }
+#projectLabel { font-weight: bold; margin-right: 8px; }
+
+#main { display: flex; flex: 1; overflow: hidden; }
+#plotPane {
+  width: 46%; min-width: 520px; border-right: 1px solid #444;
+  display: flex; flex-direction: row; background: #202020;
+}
+.plotColumn {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  border-right: 1px solid #333;
+}
+.plotColumn:last-child { border-right: 0; }
+.plotHeader {
+  height: 28px; padding: 6px 8px; background: #242424; border-bottom: 1px solid #444;
+  color: #aaa; font-size: 11px; flex-shrink: 0;
+}
+.plotWrap { flex: 1; min-height: 0; overflow: hidden; position: relative; padding: 0 22px 24px 42px; }
+.plotSvg { width: 100%; height: 100%; display: block; cursor: crosshair; }
+.tick-layer { position: absolute; inset: 0; pointer-events: none; }
+.tick-label {
+  position: absolute; color: #bbb; font-size: 11px; font-family: monospace;
+  line-height: 1; background: rgba(32,32,32,0.72); padding: 1px 3px;
+}
+.plot-slider {
+  position: absolute; top: 32px; bottom: 32px; width: 16px;
+  writing-mode: vertical-lr; direction: rtl; accent-color: #777;
+}
+.plot-scroll { left: 3px; }
+.plot-zoom { right: 3px; }
+
+#filePane { flex: 1; display: flex; flex-direction: column; min-width: 420px; background: #181818; }
+#fileHeader {
+  height: 28px; padding: 6px 8px; background: #242424; border-bottom: 1px solid #444;
+  color: #aaa; font-size: 11px; flex-shrink: 0;
+}
+#fileScroller { flex: 1; overflow: auto; }
+#fileTable { width: 100%; border-collapse: collapse; table-layout: fixed; }
+#fileTable tr { height: 18px; }
+#fileTable tr.sel { background: #3d341f; outline: 1px solid #2a8cff; outline-offset: -1px; }
+#fileTable tr:hover { background: #2a2a2a; }
+#fileTable td { border-bottom: 1px solid #222; white-space: pre; }
+td.ln {
+  width: 62px; color: #777; text-align: right; padding: 0 8px 0 4px;
+  user-select: none; border-right: 1px solid #333;
+}
+td.ipm { width: 74px; text-align: right; padding: 0 8px; border-right: 1px solid #333; }
+td.time { width: 86px; text-align: right; padding: 0 8px; color: #aaa; border-right: 1px solid #333; }
+td.cmd { padding-left: 8px; overflow: hidden; text-overflow: ellipsis; }
+
+.axis { stroke: #666; stroke-width: 0.08; vector-effect: non-scaling-stroke; }
+.grid { stroke: #383838; stroke-width: 0.05; vector-effect: non-scaling-stroke; }
+.tick { fill: #999; font-size: 2px; font-family: monospace; }
+.cursor { stroke: #2a8cff; stroke-width: 0.16; pointer-events: none; vector-effect: non-scaling-stroke; }
+.speed-seg {
+  fill: none; stroke-width: 0.18; stroke-linecap: round; stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.line-label { fill: #aaa; font-size: 2px; font-family: monospace; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <button class="btn primary" id="btnLoad">Load SBP</button>
+  <div class="sep"></div>
+  <label>Cmd/sec <input id="cmdRate" type="number" value="35" step="5" min="1"></label>
+  <label>Avg cmds <input id="avgWindow" type="number" value="5" step="1" min="1"></label>
+  <label>Queue <input id="queueDepth" type="number" value="4" step="1" min="0"> cmds</label>
+  <label>Start
+    <select id="bufferStart" style="background:#333;color:#eee;border:1px solid #555;padding:2px 4px;font-family:monospace;font-size:12px">
+      <option value="full">full</option>
+      <option value="half">half</option>
+      <option value="empty">empty</option>
+    </select>
+  </label>
+  <button class="btn" id="btnColorMode">Text: Avg</button>
+  <label>Planned <input id="plannedIpm" type="number" value="150" step="10" min="1"> ipm</label>
+  <label>Slow <input id="slowIpm" type="number" value="40" step="5" min="0"> ipm</label>
+  <label>Danger <input id="dangerIpm" type="number" value="10" step="1" min="0"> ipm</label>
+  <label>Risk <input id="riskIpm" type="number" value="1" step="0.5" min="0"> ipm</label>
+  <button class="btn" id="btnRecalc">Recalc</button>
+  <div class="sep"></div>
+  <button class="btn" id="btnFit">Fit</button>
+  <span id="projectLabel"></span>
+  <span id="status">Load a .sbp file to begin.</span>
+</div>
+
+<div id="main">
+  <div id="plotPane">
+    <div class="plotColumn">
+      <div class="plotHeader">MOVING-AVERAGE IPM VS FILE LINE</div>
+      <div id="plotWrap" class="plotWrap">
+        <input id="plotScroll" class="plot-slider plot-scroll" type="range" min="0" max="1000" value="0">
+        <svg id="plotSvg" class="plotSvg" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
+          <g id="plotG"></g>
+          <line id="cursorLine" class="cursor" x1="0" x2="100" y1="-100" y2="-100"></line>
+        </svg>
+        <div id="xTicks" class="tick-layer"></div>
+        <div id="yTicks" class="tick-layer"></div>
+        <input id="plotZoom" class="plot-slider plot-zoom" type="range" min="0" max="1000" value="0">
+      </div>
+    </div>
+    <div class="plotColumn">
+      <div class="plotHeader">QUEUE-MODEL IPM VS ESTIMATED TIME</div>
+      <div id="bufferPlotWrap" class="plotWrap">
+        <input id="bufferScroll" class="plot-slider plot-scroll" type="range" min="0" max="1000" value="0">
+        <svg id="bufferPlotSvg" class="plotSvg" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
+          <g id="bufferPlotG"></g>
+          <line id="bufferCursorLine" class="cursor" x1="0" x2="100" y1="-100" y2="-100"></line>
+        </svg>
+        <div id="bufferXTicks" class="tick-layer"></div>
+        <div id="bufferYTicks" class="tick-layer"></div>
+        <input id="bufferZoom" class="plot-slider plot-zoom" type="range" min="0" max="1000" value="0">
+      </div>
+    </div>
+  </div>
+  <div id="filePane">
+    <div id="fileHeader">SBP FILE &nbsp; | &nbsp; IPM / EST. TIME / COMMAND</div>
+    <div id="fileScroller">
+      <table id="fileTable"><tbody id="fileBody"></tbody></table>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="fileInput" accept=".sbp,.txt" style="display:none">
+
+<script>
+'use strict';
+
+const S = {
+  rows: [],
+  fileName: '',
+  selectedLine: null,
+  vb: {x: -12, y: 0, w: 190, h: 80},
+  bufferVb: {x: -12, y: 0, w: 190, h: 20},
+  pan: null,
+  xView: {x: -8, w: 190},
+  bufferXView: {x: -8, w: 190},
+  textColorMode: 'avg',
+};
+
+const svg = document.getElementById('plotSvg');
+const plotG = document.getElementById('plotG');
+const cursorLine = document.getElementById('cursorLine');
+const fileBody = document.getElementById('fileBody');
+const fileScroller = document.getElementById('fileScroller');
+const plotScroll = document.getElementById('plotScroll');
+const plotZoom = document.getElementById('plotZoom');
+const xTicks = document.getElementById('xTicks');
+const yTicks = document.getElementById('yTicks');
+const bufferSvg = document.getElementById('bufferPlotSvg');
+const bufferPlotG = document.getElementById('bufferPlotG');
+const bufferCursorLine = document.getElementById('bufferCursorLine');
+const bufferScroll = document.getElementById('bufferScroll');
+const bufferZoom = document.getElementById('bufferZoom');
+const bufferXTicks = document.getElementById('bufferXTicks');
+const bufferYTicks = document.getElementById('bufferYTicks');
+
+function setStatus(msg) { document.getElementById('status').textContent = msg; }
+function num(id) { return parseFloat(document.getElementById(id).value) || 0; }
+function cmdRate() { return Math.max(1, num('cmdRate')); }
+function avgWindow() { return Math.max(1, Math.round(num('avgWindow') || 1)); }
+function commandClearanceRateCps() { return cmdRate(); }
+function motionQueueDepthCommands() { return Math.max(0, Math.round(num('queueDepth') || 0)); }
+function initialQueueFillCommands() {
+  const cap = motionQueueDepthCommands();
+  const mode = document.getElementById('bufferStart').value;
+  if (mode === 'empty') return 0;
+  if (mode === 'half') return cap / 2;
+  return cap;
+}
+function thresholds() {
+  return {
+    planned: Math.max(1, num('plannedIpm')),
+    slow: Math.max(0, num('slowIpm')),
+    danger: Math.max(0, num('dangerIpm')),
+    risk: Math.max(0, num('riskIpm')),
+  };
+}
+
+function setVB() {
+  svg.setAttribute('viewBox', `${S.vb.x} ${S.vb.y} ${S.vb.w} ${S.vb.h}`);
+  bufferSvg.setAttribute('viewBox', `${S.bufferVb.x} ${S.bufferVb.y} ${S.bufferVb.w} ${S.bufferVb.h}`);
+}
+setVB();
+
+function svgPt(e) {
+  const targetSvg = e.currentTarget && e.currentTarget.id === 'bufferPlotSvg' ? bufferSvg : svg;
+  const vb = targetSvg === bufferSvg ? S.bufferVb : S.vb;
+  const r = targetSvg.getBoundingClientRect();
+  return {
+    x: (e.clientX - r.left) / r.width * vb.w + vb.x,
+    y: (e.clientY - r.top) / r.height * vb.h + vb.y,
+  };
+}
+
+function el(tag, attrs = {}, cls = '') {
+  const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (cls) e.setAttribute('class', cls);
+  return e;
+}
+
+function commandToken(line) {
+  const s = line.trim();
+  if (!s || s.startsWith("'")) return '';
+  return s.split(',', 1)[0].split(/\s+/, 1)[0].trim().toUpperCase();
+}
+
+function numsAfterCommand(line) {
+  const idx = line.indexOf(',');
+  if (idx < 0) return [];
+  return line.slice(idx + 1).split(',').map(raw => {
+    const s = raw.trim();
+    if (!s) return null;
+    const v = Number(s);
+    return Number.isFinite(v) ? v : null;
+  });
+}
+
+function present(values) { return values.filter(v => v !== null); }
+
+function movePosition(cmd, values, last) {
+  if (!/^[MJ][235]$/.test(cmd)) return null;
+  const dim = Number(cmd[1]);
+  const vals = present(values);
+  if (vals.length < dim) return null;
+  const x = vals[0];
+  const y = dim >= 2 ? vals[1] : (last ? last[1] : null);
+  const z = dim >= 3 ? vals[2] : (last ? last[2] : null);
+  return [x, y, z];
+}
+
+function dist3(a, b) {
+  if (!a || !b || a.includes(null) || b.includes(null)) return [0, 0];
+  const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+  return [Math.hypot(dx, dy), Math.sqrt(dx*dx + dy*dy + dz*dz)];
+}
+
+function angleSweep(a0, a1, dir) {
+  const tau = Math.PI * 2;
+  const ccw = ((a1 - a0) % tau + tau) % tau;
+  return dir !== null && dir < 0 ? ccw - tau : ccw;
+}
+
+function arcDistance(values, last) {
+  if (!last || last.includes(null)) return [null, 0, 0];
+  const vals = present(values);
+  if (vals.length < 4) return [null, 0, 0];
+  const [ex, ey, ioff, joff] = vals;
+  const dir = vals.length >= 5 ? vals[4] : null;
+  const [sx, sy, sz] = last;
+  const cx = sx + ioff, cy = sy + joff;
+  const r0 = Math.hypot(sx - cx, sy - cy);
+  const r1 = Math.hypot(ex - cx, ey - cy);
+  const r = (r0 + r1) / 2;
+  if (r <= 1e-12) {
+    const end = [ex, ey, sz];
+    const [xy, xyz] = dist3(last, end);
+    return [end, xy, xyz];
+  }
+  const a0 = Math.atan2(sy - cy, sx - cx);
+  const a1 = Math.atan2(ey - cy, ex - cx);
+  const xy = Math.abs(angleSweep(a0, a1, dir)) * r;
+  return [[ex, ey, sz], xy, xy];
+}
+
+function speedColor(ipm) {
+  const t = thresholds();
+  if (ipm <= 0) return 'rgb(119,119,119)';
+  if (ipm >= t.planned) return 'rgb(242,242,242)';
+  if (ipm >= t.slow) {
+    const k = (ipm - t.slow) / Math.max(1e-9, t.planned - t.slow);
+    const v = Math.round(150 + 92 * k);
+    return `rgb(${v},${v},${v})`;
+  }
+  if (ipm >= t.danger) {
+    const k = (ipm - t.danger) / Math.max(1e-9, t.slow - t.danger);
+    const r = Math.round(255 - 35 * k);
+    const g = Math.round(110 + 110 * k);
+    return `rgb(${r},${g},0)`;
+  }
+  if (ipm >= t.risk) {
+    const k = (ipm - t.risk) / Math.max(1e-9, t.danger - t.risk);
+    const g = Math.round(30 + 80 * k);
+    return `rgb(255,${g},0)`;
+  }
+  return 'rgb(230,0,0)';
+}
+
+function mixColor(a, b) {
+  const parse = c => c.match(/\d+/g).map(Number);
+  const ca = parse(a), cb = parse(b);
+  return `rgb(${Math.round((ca[0]+cb[0])/2)},${Math.round((ca[1]+cb[1])/2)},${Math.round((ca[2]+cb[2])/2)})`;
+}
+
+function bucket(ipm) {
+  const t = thresholds();
+  if (ipm >= t.planned) return 'planned';
+  if (ipm >= t.danger) return 'slow';
+  if (ipm >= t.risk) return 'danger';
+  if (ipm > 0) return 'risk';
+  return 'non_motion';
+}
+
+function analyze(text) {
+  const rate = cmdRate();
+  const windowSize = avgWindow();
+  const clearanceRate = commandClearanceRateCps();
+  const queueMax = motionQueueDepthCommands();
+  const lines = text.split(/\r?\n/);
+  const rows = [];
+  let last = null;
+  let motionIndex = 0;
+  let feedIpm = thresholds().planned;
+  let queueCommands = Math.min(queueMax, initialQueueFillCommands());
+  let actualTimeSec = 0;
+  const recentDistances = [];
+  let recentDistanceTotal = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const cmd = commandToken(raw);
+    let dxy = 0, dxyz = 0, isMotion = false;
+    let isCut = false;
+
+    if (cmd === 'MS') {
+      const vals = present(numsAfterCommand(raw));
+      if (vals.length >= 1 && vals[0] > 0) feedIpm = vals[0] * 60;
+    }
+
+    if (/^[MJ][235]$/.test(cmd)) {
+      const pos = movePosition(cmd, numsAfterCommand(raw), last);
+      if (pos) {
+        [dxy, dxyz] = dist3(last, pos);
+        last = pos;
+        isMotion = true;
+        isCut = cmd.startsWith('M');
+      }
+    } else if (cmd === 'CG') {
+      const result = arcDistance(numsAfterCommand(raw), last);
+      if (result[0]) {
+        last = result[0];
+        dxy = result[1];
+        dxyz = result[2];
+        isMotion = true;
+        isCut = true;
+      }
+    }
+
+    let time = rows.length ? rows[rows.length - 1].time : 0;
+    let ipm = 0;
+    let avgIpm = 0;
+    let bufferIpm = 0;
+    let motionTimeSec = 0;
+    let starvationSec = 0;
+    let commandsCleared = 0;
+    let queueBefore = queueCommands;
+    let queueAfter = queueCommands;
+    if (isMotion) {
+      motionIndex++;
+      time = motionIndex / rate;
+      ipm = dxyz * rate * 60;
+      recentDistances.push(dxyz);
+      recentDistanceTotal += dxyz;
+      while (recentDistances.length > windowSize) {
+        recentDistanceTotal -= recentDistances.shift();
+      }
+      avgIpm = (recentDistanceTotal / recentDistances.length) * rate * 60;
+    }
+    if (isCut && dxy > 1e-12 && feedIpm > 1e-12) {
+      motionTimeSec = dxy / (feedIpm / 60);
+      queueBefore = queueCommands;
+      commandsCleared = clearanceRate * motionTimeSec;
+      const queueCandidate = queueCommands + commandsCleared - 1.0;
+      let segmentActual = motionTimeSec;
+      if (queueCandidate >= 0) {
+        queueCommands = Math.min(queueCandidate, queueMax);
+      } else {
+        const missingCommands = -queueCandidate;
+        starvationSec = missingCommands / clearanceRate;
+        segmentActual = motionTimeSec + starvationSec;
+        queueCommands = 0;
+      }
+      queueAfter = queueCommands;
+      actualTimeSec += segmentActual;
+      bufferIpm = segmentActual > 0 ? 60 * dxy / segmentActual : 0;
+    } else if (isMotion) {
+      actualTimeSec += dxy > 1e-12 && feedIpm > 1e-12 ? dxy / (feedIpm / 60) : 0;
+    }
+    const bucketName = bucket(avgIpm);
+    rows.push({
+      line: i + 1, raw, cmd, dxy, dxyz, ipm, avgIpm, bufferIpm,
+      time, actualTimeSec, feedIpm, motionTimeSec, starvationSec,
+      commandsCleared, queueBefore, queueAfter, isCut,
+      bucket: bucketName,
+      avgColor: speedColor(avgIpm),
+      bufferColor: speedColor(bufferIpm),
+    });
+  }
+  return rows;
+}
+
+function fmtIpm(v) {
+  if (v <= 0) return '';
+  if (v < 10) return v.toFixed(2);
+  if (v < 100) return v.toFixed(1);
+  return v.toFixed(0);
+}
+
+function renderFile() {
+  fileBody.innerHTML = '';
+  const frag = document.createDocumentFragment();
+  for (const r of S.rows) {
+    const tr = document.createElement('tr');
+    tr.id = `line-${r.line}`;
+    tr.dataset.line = r.line;
+    const ln = document.createElement('td');
+    ln.className = 'ln';
+    ln.textContent = r.line;
+    const ipm = document.createElement('td');
+    ipm.className = 'ipm';
+    ipm.textContent = fmtIpm(S.textColorMode === 'avg' ? r.avgIpm : r.bufferIpm);
+    const time = document.createElement('td');
+    time.className = 'time';
+    time.textContent = r.actualTimeSec > 0 ? r.actualTimeSec.toFixed(3) : '';
+    const cmd = document.createElement('td');
+    cmd.className = 'cmd';
+    cmd.textContent = r.raw;
+    const colorValue = S.textColorMode === 'avg' ? r.avgIpm : r.bufferIpm;
+    const color = S.textColorMode === 'avg' ? r.avgColor : r.bufferColor;
+    if (colorValue > 0) {
+      ipm.style.color = color;
+      time.style.color = color;
+      cmd.style.color = color;
+    } else {
+      ipm.style.color = '#777';
+      time.style.color = '#777';
+      cmd.style.color = '#777';
+    }
+    tr.appendChild(ln);
+    tr.appendChild(ipm);
+    tr.appendChild(time);
+    tr.appendChild(cmd);
+    tr.addEventListener('click', () => selectLine(r.line, true));
+    frag.appendChild(tr);
+  }
+  fileBody.appendChild(frag);
+}
+
+function ipmToX(ipm) {
+  if (ipm <= 0) return 0;
+  return Math.log10(Math.max(0.1, ipm)) * 42;
+}
+
+function plotIpm(ipm) {
+  return Math.min(ipm, thresholds().planned);
+}
+
+function plotIpmRange() {
+  const values = motionRows().map(r => plotIpm(r.avgIpm)).filter(v => v > 0);
+  if (!values.length) return {min: 1, max: thresholds().planned};
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  return {
+    min: Math.max(0.001, minValue * 0.95),
+    max: Math.max(minValue * 1.01, maxValue * 1.05),
+  };
+}
+
+function motionRows() {
+  return S.rows.filter(r => r.avgIpm > 0);
+}
+
+function maxTime() {
+  return S.rows.length;
+}
+
+function setFixedXView() {
+  const range = plotIpmRange();
+  const minX = ipmToX(range.min);
+  const maxX = ipmToX(range.max);
+  S.xView = {x: minX, w: Math.max(1, maxX - minX)};
+  S.vb.x = S.xView.x;
+  S.vb.w = S.xView.w;
+}
+
+function clampView() {
+  const mt = maxTime();
+  if (mt <= 0) return;
+  S.vb.h = Math.max(2, Math.min(S.vb.h, mt));
+  S.vb.y = Math.max(0, Math.min(S.vb.y, Math.max(0, mt - S.vb.h)));
+}
+
+function updateSliders() {
+  const mt = maxTime();
+  if (mt <= 0) return;
+  const maxStart = Math.max(0, mt - S.vb.h);
+  plotScroll.value = maxStart <= 0 ? 1000 : Math.round((1 - S.vb.y / maxStart) * 1000);
+
+  const minH = Math.max(1, mt / 120);
+  const maxH = Math.max(minH, mt);
+  const z = (Math.log(maxH) - Math.log(S.vb.h)) / (Math.log(maxH) - Math.log(minH));
+  plotZoom.value = Math.round(Math.max(0, Math.min(1, z || 0)) * 1000);
+}
+
+function renderAxisTicks() {
+  xTicks.innerHTML = '';
+  yTicks.innerHTML = '';
+  if (!S.rows.length) return;
+
+  const svgRect = svg.getBoundingClientRect();
+  const wrapRect = document.getElementById('plotWrap').getBoundingClientRect();
+  const sx = svgRect.left - wrapRect.left;
+  const sy = svgRect.top - wrapRect.top;
+  const sw = svgRect.width;
+  const sh = svgRect.height;
+
+  const range = plotIpmRange();
+  const tickValues = [range.min, 1, 10, 40, thresholds().planned, range.max]
+    .filter((v, i, a) => v > 0 && a.indexOf(v) === i)
+    .sort((a, b) => a - b);
+  for (const ipm of tickValues) {
+    const x = sx + (ipmToX(ipm) - S.vb.x) / S.vb.w * sw;
+    if (x < sx - 8 || x > sx + sw + 8) continue;
+    const label = document.createElement('div');
+    label.className = 'tick-label';
+    label.textContent = ipm < 10 ? ipm.toFixed(1) : Math.round(ipm);
+    label.style.left = `${x}px`;
+    label.style.bottom = '6px';
+    label.style.transform = 'translateX(-50%)';
+    xTicks.appendChild(label);
+  }
+
+  const step = Math.max(1, Math.ceil(S.vb.h / 8 / 10) * 10);
+  const start = Math.ceil(S.vb.y / step) * step;
+  for (let line = start; line <= S.vb.y + S.vb.h; line += step) {
+    if (line < 1 || line > S.rows.length) continue;
+    const y = sy + (line - S.vb.y) / S.vb.h * sh;
+    const label = document.createElement('div');
+    label.className = 'tick-label';
+    label.textContent = Math.round(line);
+    label.style.left = '4px';
+    label.style.top = `${y}px`;
+    label.style.transform = 'translateY(-50%)';
+    yTicks.appendChild(label);
+  }
+}
+
+function visibleMotionRows() {
+  const motion = S.rows.filter(r => r.avgIpm > 0);
+  if (!motion.length) return [];
+  const top = S.vb.y, bot = S.vb.y + S.vb.h;
+  let first = motion.findIndex(r => r.line >= top);
+  if (first < 0) first = motion.length - 1;
+  first = Math.max(0, first - 1);
+  let last = first;
+  while (last < motion.length && motion[last].line <= bot) last++;
+  last = Math.min(motion.length - 1, last + 1);
+  return motion.slice(first, last + 1);
+}
+
+function renderPlot() {
+  plotG.innerHTML = '';
+  if (!S.rows.length) return;
+
+  const motion = motionRows();
+  if (!motion.length) return;
+  const mt = maxTime();
+  const maxX = S.xView.x + S.xView.w;
+
+  clampView();
+  S.vb.x = S.xView.x;
+  S.vb.w = S.xView.w;
+  setVB();
+  updateSliders();
+
+  const range = plotIpmRange();
+  const tickValues = [range.min, 1, 10, 40, thresholds().planned, range.max]
+    .filter((v, i, a) => v > 0 && a.indexOf(v) === i)
+    .sort((a, b) => a - b);
+  for (const ipm of tickValues) {
+    const x = ipmToX(ipm);
+    plotG.appendChild(el('line', {x1:x, y1:S.vb.y, x2:x, y2:S.vb.y + S.vb.h}, 'grid'));
+  }
+
+  const step = Math.max(5, Math.ceil(S.vb.h / 8 / 5) * 5);
+  const start = Math.floor(S.vb.y / step) * step;
+  for (let y = start; y <= S.vb.y + S.vb.h; y += step) {
+    if (y < 0 || y > mt) continue;
+    plotG.appendChild(el('line', {x1:S.vb.x, y1:y, x2:maxX, y2:y}, 'grid'));
+  }
+
+  plotG.appendChild(el('line', {x1:S.vb.x, y1:S.vb.y, x2:S.vb.x, y2:S.vb.y + S.vb.h}, 'axis'));
+  plotG.appendChild(el('line', {x1:S.vb.x, y1:S.vb.y, x2:maxX, y2:S.vb.y}, 'axis'));
+
+  const visible = visibleMotionRows();
+  for (let i = 0; i < visible.length - 1; i++) {
+    const a = visible[i], b = visible[i + 1];
+    const x1 = ipmToX(plotIpm(a.avgIpm)), x2 = ipmToX(plotIpm(b.avgIpm));
+    const color = mixColor(a.avgColor, b.avgColor);
+    const seg = el('line', {
+      x1, y1:a.line, x2, y2:b.line,
+      stroke: color,
+      'data-line': b.line,
+    }, 'speed-seg');
+    plotG.appendChild(seg);
+  }
+
+  updateCursor();
+  renderAxisTicks();
+}
+
+function bufferRows() {
+  return S.rows.filter(r => r.bufferIpm > 0 && r.actualTimeSec > 0);
+}
+
+function bufferMaxTime() {
+  const rows = bufferRows();
+  return rows.length ? rows[rows.length - 1].actualTimeSec : 0;
+}
+
+function bufferIpmRange() {
+  const values = bufferRows().map(r => plotIpm(r.bufferIpm)).filter(v => v > 0);
+  if (!values.length) return {min: 1, max: thresholds().planned};
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  return {
+    min: Math.max(0.001, minValue * 0.95),
+    max: Math.max(minValue * 1.01, maxValue * 1.05),
+  };
+}
+
+function setFixedBufferXView() {
+  const range = bufferIpmRange();
+  const minX = ipmToX(range.min);
+  const maxX = ipmToX(range.max);
+  S.bufferXView = {x: minX, w: Math.max(1, maxX - minX)};
+  S.bufferVb.x = S.bufferXView.x;
+  S.bufferVb.w = S.bufferXView.w;
+}
+
+function clampBufferView() {
+  const mt = bufferMaxTime();
+  if (mt <= 0) return;
+  S.bufferVb.h = Math.max(0.05, Math.min(S.bufferVb.h, mt));
+  S.bufferVb.y = Math.max(0, Math.min(S.bufferVb.y, Math.max(0, mt - S.bufferVb.h)));
+}
+
+function updateBufferSliders() {
+  const mt = bufferMaxTime();
+  if (mt <= 0) return;
+  const maxStart = Math.max(0, mt - S.bufferVb.h);
+  bufferScroll.value = maxStart <= 0 ? 1000 : Math.round((1 - S.bufferVb.y / maxStart) * 1000);
+
+  const minH = Math.max(0.05, mt / 120);
+  const maxH = Math.max(minH, mt);
+  const z = (Math.log(maxH) - Math.log(S.bufferVb.h)) / (Math.log(maxH) - Math.log(minH));
+  bufferZoom.value = Math.round(Math.max(0, Math.min(1, z || 0)) * 1000);
+}
+
+function renderBufferAxisTicks() {
+  bufferXTicks.innerHTML = '';
+  bufferYTicks.innerHTML = '';
+  if (!S.rows.length) return;
+
+  const svgRect = bufferSvg.getBoundingClientRect();
+  const wrapRect = document.getElementById('bufferPlotWrap').getBoundingClientRect();
+  const sx = svgRect.left - wrapRect.left;
+  const sy = svgRect.top - wrapRect.top;
+  const sw = svgRect.width;
+  const sh = svgRect.height;
+
+  const range = bufferIpmRange();
+  const tickValues = [range.min, 1, 10, 40, thresholds().planned, range.max]
+    .filter((v, i, a) => v > 0 && a.indexOf(v) === i)
+    .sort((a, b) => a - b);
+  for (const ipm of tickValues) {
+    const x = sx + (ipmToX(ipm) - S.bufferVb.x) / S.bufferVb.w * sw;
+    if (x < sx - 8 || x > sx + sw + 8) continue;
+    const label = document.createElement('div');
+    label.className = 'tick-label';
+    label.textContent = ipm < 10 ? ipm.toFixed(1) : Math.round(ipm);
+    label.style.left = `${x}px`;
+    label.style.bottom = '6px';
+    label.style.transform = 'translateX(-50%)';
+    bufferXTicks.appendChild(label);
+  }
+
+  const step = Math.max(0.1, Math.ceil(S.bufferVb.h / 8 * 10) / 10);
+  const start = Math.ceil(S.bufferVb.y / step) * step;
+  for (let t = start; t <= S.bufferVb.y + S.bufferVb.h; t += step) {
+    if (t < 0 || t > bufferMaxTime()) continue;
+    const y = sy + (t - S.bufferVb.y) / S.bufferVb.h * sh;
+    const label = document.createElement('div');
+    label.className = 'tick-label';
+    label.textContent = t.toFixed(1);
+    label.style.left = '4px';
+    label.style.top = `${y}px`;
+    label.style.transform = 'translateY(-50%)';
+    bufferYTicks.appendChild(label);
+  }
+}
+
+function visibleBufferRows() {
+  const rows = bufferRows();
+  if (!rows.length) return [];
+  const top = S.bufferVb.y, bot = S.bufferVb.y + S.bufferVb.h;
+  let first = rows.findIndex(r => r.actualTimeSec >= top);
+  if (first < 0) first = rows.length - 1;
+  first = Math.max(0, first - 1);
+  let last = first;
+  while (last < rows.length && rows[last].actualTimeSec <= bot) last++;
+  last = Math.min(rows.length - 1, last + 1);
+  return rows.slice(first, last + 1);
+}
+
+function renderBufferPlot() {
+  bufferPlotG.innerHTML = '';
+  const rows = bufferRows();
+  if (!rows.length) return;
+  const mt = bufferMaxTime();
+  const maxX = S.bufferXView.x + S.bufferXView.w;
+
+  clampBufferView();
+  S.bufferVb.x = S.bufferXView.x;
+  S.bufferVb.w = S.bufferXView.w;
+  setVB();
+  updateBufferSliders();
+
+  const range = bufferIpmRange();
+  const tickValues = [range.min, 1, 10, 40, thresholds().planned, range.max]
+    .filter((v, i, a) => v > 0 && a.indexOf(v) === i)
+    .sort((a, b) => a - b);
+  for (const ipm of tickValues) {
+    const x = ipmToX(ipm);
+    bufferPlotG.appendChild(el('line', {x1:x, y1:S.bufferVb.y, x2:x, y2:S.bufferVb.y + S.bufferVb.h}, 'grid'));
+  }
+
+  const step = Math.max(0.1, Math.ceil(S.bufferVb.h / 8 * 10) / 10);
+  const start = Math.floor(S.bufferVb.y / step) * step;
+  for (let y = start; y <= S.bufferVb.y + S.bufferVb.h; y += step) {
+    if (y < 0 || y > mt) continue;
+    bufferPlotG.appendChild(el('line', {x1:S.bufferVb.x, y1:y, x2:maxX, y2:y}, 'grid'));
+  }
+
+  bufferPlotG.appendChild(el('line', {x1:S.bufferVb.x, y1:S.bufferVb.y, x2:S.bufferVb.x, y2:S.bufferVb.y + S.bufferVb.h}, 'axis'));
+  bufferPlotG.appendChild(el('line', {x1:S.bufferVb.x, y1:S.bufferVb.y, x2:maxX, y2:S.bufferVb.y}, 'axis'));
+
+  const visible = visibleBufferRows();
+  for (let i = 0; i < visible.length - 1; i++) {
+    const a = visible[i], b = visible[i + 1];
+    const x1 = ipmToX(plotIpm(a.bufferIpm)), x2 = ipmToX(plotIpm(b.bufferIpm));
+    const color = mixColor(a.bufferColor, b.bufferColor);
+    bufferPlotG.appendChild(el('line', {
+      x1, y1:a.actualTimeSec, x2, y2:b.actualTimeSec,
+      stroke: color,
+      'data-line': b.line,
+    }, 'speed-seg'));
+  }
+
+  updateBufferCursor();
+  renderBufferAxisTicks();
+}
+
+function fitPlot() {
+  const motion = motionRows();
+  if (!motion.length) return;
+  const mt = maxTime();
+  setFixedXView();
+  S.vb = {x: S.xView.x, y: 0, w: S.xView.w, h: Math.max(2, mt)};
+  setFixedBufferXView();
+  S.bufferVb = {x: S.bufferXView.x, y: 0, w: S.bufferXView.w, h: Math.max(0.05, bufferMaxTime())};
+  setVB();
+  renderPlot();
+  renderBufferPlot();
+}
+
+function rowForLine(line) {
+  return S.rows[Math.max(0, Math.min(S.rows.length - 1, line - 1))];
+}
+
+function nearestLineForTime(t) {
+  let best = S.rows[0], bd = Infinity;
+  for (const r of S.rows) {
+    if (r.avgIpm <= 0) continue;
+    const d = Math.abs(r.line - t);
+    if (d < bd) { best = r; bd = d; }
+  }
+  return best ? best.line : 1;
+}
+
+function nearestLineForActualTime(t) {
+  let best = S.rows[0], bd = Infinity;
+  for (const r of S.rows) {
+    if (r.bufferIpm <= 0) continue;
+    const d = Math.abs(r.actualTimeSec - t);
+    if (d < bd) { best = r; bd = d; }
+  }
+  return best ? best.line : 1;
+}
+
+function selectLine(line, scrollFile) {
+  if (!S.rows.length) return;
+  const old = S.selectedLine ? document.getElementById(`line-${S.selectedLine}`) : null;
+  if (old) old.classList.remove('sel');
+  S.selectedLine = line;
+  const tr = document.getElementById(`line-${line}`);
+  if (tr) {
+    tr.classList.add('sel');
+    if (scrollFile) tr.scrollIntoView({block:'center'});
+  }
+  const r = rowForLine(line);
+  if (r && (r.line < S.vb.y || r.line > S.vb.y + S.vb.h)) {
+    S.vb.y = Math.max(0, r.line - S.vb.h / 2);
+    setVB();
+    renderPlot();
+  }
+  if (r && r.actualTimeSec > 0 &&
+      (r.actualTimeSec < S.bufferVb.y || r.actualTimeSec > S.bufferVb.y + S.bufferVb.h)) {
+    S.bufferVb.y = Math.max(0, r.actualTimeSec - S.bufferVb.h / 2);
+    setVB();
+    renderBufferPlot();
+  }
+  updateCursor();
+  updateBufferCursor();
+}
+
+function updateCursor() {
+  if (!S.selectedLine) {
+    cursorLine.setAttribute('y1', -100);
+    cursorLine.setAttribute('y2', -100);
+    return;
+  }
+  const r = rowForLine(S.selectedLine);
+  if (!r) return;
+  cursorLine.setAttribute('x1', S.vb.x);
+  cursorLine.setAttribute('x2', S.vb.x + S.vb.w);
+  cursorLine.setAttribute('y1', r.line);
+  cursorLine.setAttribute('y2', r.line);
+}
+
+function updateBufferCursor() {
+  if (!S.selectedLine) {
+    bufferCursorLine.setAttribute('y1', -100);
+    bufferCursorLine.setAttribute('y2', -100);
+    return;
+  }
+  const r = rowForLine(S.selectedLine);
+  if (!r) return;
+  bufferCursorLine.setAttribute('x1', S.bufferVb.x);
+  bufferCursorLine.setAttribute('x2', S.bufferVb.x + S.bufferVb.w);
+  bufferCursorLine.setAttribute('y1', r.actualTimeSec);
+  bufferCursorLine.setAttribute('y2', r.actualTimeSec);
+}
+
+function loadText(text, name) {
+  S.fileName = name;
+  S.rows = analyze(text);
+  S.selectedLine = null;
+  renderFile();
+  fitPlot();
+  const motion = S.rows.filter(r => r.avgIpm > 0);
+  const queueMotion = S.rows.filter(r => r.bufferIpm > 0);
+  const under40 = queueMotion.filter(r => r.bufferIpm < 40).length;
+  const under10 = queueMotion.filter(r => r.bufferIpm < 10).length;
+  const under1 = queueMotion.filter(r => r.bufferIpm < 1).length;
+  const totalTime = bufferMaxTime();
+  const critLen = (thresholds().planned / 60) / commandClearanceRateCps();
+  setStatus(`${name}: ${S.rows.length} lines, ${motion.length} motion rows, ${avgWindow()}-cmd avg, queue ${commandClearanceRateCps()} cps/${motionQueueDepthCommands()} cmds, time ${totalTime.toFixed(2)}s, critical segment ${critLen.toFixed(4)}", <40 ipm ${under40}, <10 ${under10}, <1 ${under1}`);
+}
+
+function selectAtPlotY(y) {
+  selectLine(nearestLineForTime(Math.max(0, Math.min(maxTime(), y))), true);
+}
+
+function selectAtBufferPlotY(y) {
+  selectLine(nearestLineForActualTime(Math.max(0, Math.min(bufferMaxTime(), y))), true);
+}
+
+document.getElementById('btnLoad').onclick = () => document.getElementById('fileInput').click();
+document.getElementById('btnFit').onclick = fitPlot;
+document.getElementById('btnColorMode').onclick = () => {
+  S.textColorMode = S.textColorMode === 'avg' ? 'buffer' : 'avg';
+  document.getElementById('btnColorMode').textContent =
+    S.textColorMode === 'avg' ? 'Text: Avg' : 'Text: Queue';
+  renderFile();
+  if (S.selectedLine) selectLine(S.selectedLine, false);
+};
+document.getElementById('btnRecalc').onclick = () => {
+  if (!S.rows.length) return;
+  const text = S.rows.map(r => r.raw).join('\n');
+  loadText(text, S.fileName || 'current file');
+};
+
+document.getElementById('fileInput').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = ev => loadText(ev.target.result, f.name);
+  r.readAsText(f);
+  e.target.value = '';
+});
+
+svg.addEventListener('click', e => {
+  const p = svgPt(e);
+  selectAtPlotY(p.y);
+});
+
+bufferSvg.addEventListener('click', e => {
+  const p = svgPt(e);
+  selectAtBufferPlotY(p.y);
+});
+
+svg.addEventListener('mousedown', e => {
+  const p = svgPt(e);
+  if (e.altKey || e.button === 1) {
+    S.pan = {mode:'pan', sx:p.x, sy:p.y, vb:{...S.vb}};
+  } else if (e.button === 0) {
+    S.pan = {mode:'select'};
+    selectAtPlotY(p.y);
+  } else {
+    return;
+  }
+  e.preventDefault();
+});
+
+bufferSvg.addEventListener('mousedown', e => {
+  const p = svgPt(e);
+  if (e.altKey || e.button === 1) {
+    S.pan = {mode:'buffer-pan', sx:p.x, sy:p.y, vb:{...S.bufferVb}};
+  } else if (e.button === 0) {
+    S.pan = {mode:'buffer-select'};
+    selectAtBufferPlotY(p.y);
+  } else {
+    return;
+  }
+  e.preventDefault();
+});
+svg.addEventListener('mousemove', e => {
+  if (!S.pan) return;
+  const p = svgPt(e);
+  if (S.pan.mode === 'pan') {
+    S.vb.y = Math.max(0, S.pan.vb.y - (p.y - S.pan.sy));
+    clampView();
+    setVB();
+    renderPlot();
+  } else if (S.pan.mode === 'select') {
+    selectAtPlotY(p.y);
+  }
+});
+bufferSvg.addEventListener('mousemove', e => {
+  if (!S.pan) return;
+  const p = svgPt(e);
+  if (S.pan.mode === 'buffer-pan') {
+    S.bufferVb.y = Math.max(0, S.pan.vb.y - (p.y - S.pan.sy));
+    clampBufferView();
+    setVB();
+    renderBufferPlot();
+  } else if (S.pan.mode === 'buffer-select') {
+    selectAtBufferPlotY(p.y);
+  }
+});
+svg.addEventListener('mouseup', () => { S.pan = null; });
+svg.addEventListener('mouseleave', () => { S.pan = null; });
+bufferSvg.addEventListener('mouseup', () => { S.pan = null; });
+bufferSvg.addEventListener('mouseleave', () => { S.pan = null; });
+
+svg.addEventListener('wheel', e => {
+  e.preventDefault();
+  const rect = svg.getBoundingClientRect();
+  const p = svgPt(e);
+  if (e.ctrlKey) {
+    // Browser pinch gestures on Mac trackpads usually arrive as ctrl+wheel.
+    const factorY = e.deltaY > 0 ? 1.14 : 1 / 1.14;
+    S.vb.h *= factorY;
+    S.vb.y = Math.max(0, p.y - (p.y - S.vb.y) * factorY);
+  } else {
+    S.vb.y += e.deltaY / rect.height * S.vb.h;
+  }
+  clampView();
+  S.vb.x = S.xView.x;
+  S.vb.w = S.xView.w;
+  setVB();
+  renderPlot();
+}, {passive:false});
+
+bufferSvg.addEventListener('wheel', e => {
+  e.preventDefault();
+  const rect = bufferSvg.getBoundingClientRect();
+  const p = svgPt(e);
+  if (e.ctrlKey) {
+    const factorY = e.deltaY > 0 ? 1.14 : 1 / 1.14;
+    S.bufferVb.h *= factorY;
+    S.bufferVb.y = Math.max(0, p.y - (p.y - S.bufferVb.y) * factorY);
+  } else {
+    S.bufferVb.y += e.deltaY / rect.height * S.bufferVb.h;
+  }
+  clampBufferView();
+  S.bufferVb.x = S.bufferXView.x;
+  S.bufferVb.w = S.bufferXView.w;
+  setVB();
+  renderBufferPlot();
+}, {passive:false});
+
+plotScroll.addEventListener('input', () => {
+  const mt = maxTime();
+  const maxStart = Math.max(0, mt - S.vb.h);
+  S.vb.y = maxStart * (1 - Number(plotScroll.value) / 1000);
+  clampView();
+  setVB();
+  renderPlot();
+});
+
+plotZoom.addEventListener('input', () => {
+  const mt = maxTime();
+  if (mt <= 0) return;
+  const center = S.selectedLine ? rowForLine(S.selectedLine).line : S.vb.y + S.vb.h / 2;
+  const minH = Math.max(1, mt / 120);
+  const maxH = Math.max(minH, mt);
+  const z = Number(plotZoom.value) / 1000;
+  S.vb.h = Math.exp(Math.log(maxH) * (1 - z) + Math.log(minH) * z);
+  S.vb.y = center - S.vb.h / 2;
+  clampView();
+  setVB();
+  renderPlot();
+});
+
+bufferScroll.addEventListener('input', () => {
+  const mt = bufferMaxTime();
+  const maxStart = Math.max(0, mt - S.bufferVb.h);
+  S.bufferVb.y = maxStart * (1 - Number(bufferScroll.value) / 1000);
+  clampBufferView();
+  setVB();
+  renderBufferPlot();
+});
+
+bufferZoom.addEventListener('input', () => {
+  const mt = bufferMaxTime();
+  if (mt <= 0) return;
+  const center = S.selectedLine ? rowForLine(S.selectedLine).actualTimeSec : S.bufferVb.y + S.bufferVb.h / 2;
+  const minH = Math.max(0.05, mt / 120);
+  const maxH = Math.max(minH, mt);
+  const z = Number(bufferZoom.value) / 1000;
+  S.bufferVb.h = Math.exp(Math.log(maxH) * (1 - z) + Math.log(minH) * z);
+  S.bufferVb.y = center - S.bufferVb.h / 2;
+  clampBufferView();
+  setVB();
+  renderBufferPlot();
+});
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (!S.rows.length) return;
+  if (e.key === 'ArrowDown') selectLine(Math.min(S.rows.length, (S.selectedLine || 1) + 1), true);
+  if (e.key === 'ArrowUp') selectLine(Math.max(1, (S.selectedLine || 1) - 1), true);
+});
+
+const _urlProject = new URLSearchParams(window.location.search).get('project');
+if (_urlProject) document.getElementById('projectLabel').textContent = '[' + _urlProject + ']';
+</script>
+</body>
+</html>

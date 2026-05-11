@@ -20,7 +20,15 @@ body { display: flex; flex-direction: column; height: 100vh; font-family: monosp
 .btn.primary:hover { background: #2a5a9a; }
 .btn.warn { background: #7a3a00; border-color: #aa6a00; }
 .btn.warn:hover { background: #8a4a10; }
+.btn.active { background: #5a2a8a; border-color: #9a5acc; color: #eee; }
 .sep { width: 1px; height: 24px; background: #444; margin: 0 2px; }
+.tlabel { font-size: 12px; color: #aaa; display: flex; align-items: center; gap: 3px; }
+.tnum {
+  width: 48px; background: #333; color: #eee; border: 1px solid #555;
+  padding: 2px 4px; font-size: 12px; font-family: monospace; border-radius: 2px;
+}
+.tnum:focus { outline: 1px solid #5a9aee; }
+#rotSlider { width: 70px; accent-color: #5a9aee; vertical-align: middle; cursor: pointer; }
 #status { flex: 1; color: #aaa; font-size: 12px; min-width: 120px; }
 #checkResult { font-size: 12px; font-weight: bold; }
 .ok { color: #4c4; } .err { color: #f44; }
@@ -42,12 +50,12 @@ body { display: flex; flex-direction: column; height: 100vh; font-family: monosp
 .pitem.placed { background: #2a2a2a; border-color: #333; color: #555; }
 .pitem .pdim { color: #666; font-size: 10px; }
 
-#canvasWrap { flex: 1; overflow: hidden; position: relative; cursor: crosshair; }
-#mainSvg { width: 100%; height: 100%; display: block; }
+#canvasWrap { flex: 1; overflow: hidden; position: relative; }
+#mainSvg { width: 100%; height: 100%; display: block; cursor: crosshair; }
+#mainSvg.block-mode { cursor: cell; }
 
-/* SVG styles — referenced by JS-generated elements */
+/* SVG element classes */
 .sheet-bg   { fill: #f9f5e8; stroke: #888; stroke-width: 0.15; }
-.sheet-edge { fill: none; stroke: #bbb; stroke-width: 0.05; stroke-dasharray: 2 1; }
 .sheet-lbl  { fill: #999; font-size: 2.5px; font-family: monospace; }
 .grid-line  { stroke: #e8e4d8; stroke-width: 0.04; }
 
@@ -60,6 +68,21 @@ body { display: flex; flex-direction: column; height: 100vh; font-family: monosp
 .s-margin  { fill: none; stroke: rgba(255,120,0,0.35); stroke-width: 1; pointer-events: none; }
 .s-label   { fill: #1a3a2a; font-size: 1.8px; font-family: monospace; pointer-events: none; text-anchor: middle; dominant-baseline: middle; }
 .s-outofbounds { stroke: #ff0000; stroke-width: 0.4; fill: rgba(255,0,0,0.08); }
+.s-poly.mirrored-risky { stroke: #4488ee !important; stroke-width: 0.3 !important; }
+.pitem.risky { border-left: 3px solid #4488ee; }
+.btn.mirror-warn { background: #1a3a7a; border-color: #4488ee; color: #88bbff; }
+
+/* Obstacle (off-limits block) */
+.obs-hatch { fill: url(#hatch); pointer-events: none; }
+.obs-rect  { fill: rgba(180,40,40,0.18); stroke: #c44; stroke-width: 0.22;
+             stroke-dasharray: 1.6 0.8; cursor: move; }
+.obs-rect.sel  { stroke: #ff8800; stroke-width: 0.34; fill: rgba(200,80,0,0.22); }
+.obs-rect.viol { stroke: #ff2200; stroke-width: 0.4; }
+.obs-label { fill: #c44; font-size: 1.8px; font-family: monospace; font-weight: bold;
+             pointer-events: none; text-anchor: middle; dominant-baseline: middle; }
+/* drag-preview for new block */
+.obs-preview { fill: rgba(160,80,200,0.15); stroke: #9a5acc;
+               stroke-width: 0.22; stroke-dasharray: 1 0.5; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -69,14 +92,40 @@ body { display: flex; flex-direction: column; height: 100vh; font-family: monosp
   <button class="btn" id="btnLoadLayout">Load Layout</button>
   <div class="sep"></div>
   <button class="btn" id="btnAddSheet">+ Sheet</button>
-  <button class="btn" id="btnRotate" title="Key: R">Rotate 90° (R)</button>
   <div class="sep"></div>
-  <label style="font-size:12px;color:#ccc">Snap offset&nbsp;<input id="snapOffset" type="number" value="0.125" step="0.0625" min="0" style="width:52px;background:#333;color:#eee;border:1px solid #555;padding:2px 4px;font-size:12px">&nbsp;in</label>
-  <button class="btn" id="btnSnapTop"    title="Snap selected shelf's top edge to sheet top edge">⬆ Snap Top</button>
-  <button class="btn" id="btnSnapBottom" title="Snap selected shelf's bottom edge to sheet bottom edge">⬇ Snap Bottom</button>
-  <button class="btn" id="btnSnapLeft"   title="Snap selected shelf's left edge to sheet left edge">⬅ Snap Left</button>
-  <button class="btn" id="btnSnapRight"  title="Snap selected shelf's right edge to sheet right edge">➡ Snap Right</button>
+
+  <!-- Rotation controls -->
+  <span class="tlabel">
+    Rot°
+    <input id="rotSlider" type="range" min="0" max="359" step="1" value="0"
+           title="Rotation (0–359°)">
+    <input id="rotNum" class="tnum" type="number" min="0" max="359" step="1" value="0"
+           title="Exact rotation in degrees">
+  </span>
+  <button class="btn" id="btnRotate" title="Add 90° — Key: R">+90° (R)</button>
+  <button class="btn" id="btnMirror" title="Mirror — Key: M">⇄ Mirror (M)</button>
   <div class="sep"></div>
+
+  <!-- Snap controls -->
+  <span class="tlabel">Snap&nbsp;<input id="snapOffset" class="tnum" type="number" value="0.125" step="0.0625" min="0">&nbsp;in</span>
+  <button class="btn" id="btnSnapTop"    title="Snap top edge — Key: ↑">⬆ Top</button>
+  <button class="btn" id="btnSnapBottom" title="Snap bottom edge — Key: ↓">⬇ Bot</button>
+  <button class="btn" id="btnSnapLeft"   title="Snap left edge — Key: ←">⬅ Left</button>
+  <button class="btn" id="btnSnapRight"  title="Snap right edge — Key: →">➡ Right</button>
+  <div class="sep"></div>
+
+  <!-- Block obstacle controls -->
+  <span class="tlabel">
+    Block:
+    W&nbsp;<input id="blockW" class="tnum" type="number" value="12" step="0.125" min="0.25" title="Block width (inches)">
+    H&nbsp;<input id="blockH" class="tnum" type="number" value="6"  step="0.125" min="0.25" title="Block height (inches)">
+    <input id="blockLabel" type="text" value="Reserved"
+           style="width:70px;background:#333;color:#eee;border:1px solid #555;padding:2px 5px;font-size:12px;border-radius:2px"
+           placeholder="label" title="Block label">
+  </span>
+  <button class="btn" id="btnAddBlock" title="Click to place block — Key: B">Place Block (B)</button>
+  <div class="sep"></div>
+
   <button class="btn warn" id="btnCheck" title="Key: C">Check (C)</button>
   <button class="btn primary" id="btnExport" title="Key: E">Export (E)</button>
   <div class="sep"></div>
@@ -92,11 +141,19 @@ body { display: flex; flex-direction: column; height: 100vh; font-family: monosp
   </div>
   <div id="canvasWrap">
     <svg id="mainSvg" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <!-- Diagonal hatch fill for obstacle blocks -->
+        <pattern id="hatch" patternUnits="userSpaceOnUse" width="3" height="3" patternTransform="rotate(45)">
+          <line x1="0" y1="0" x2="0" y2="3" stroke="#c44" stroke-width="0.6" stroke-opacity="0.35"/>
+        </pattern>
+      </defs>
       <g id="vp">
         <rect id="bgRect" x="-5000" y="-5000" width="20000" height="20000" fill="#2a2a2a"/>
         <g id="sheetsG"></g>
+        <g id="obstaclesG"></g>
         <g id="shelvesG"></g>
         <g id="violsG"></g>
+        <g id="previewG"></g>
       </g>
     </svg>
   </div>
@@ -110,28 +167,34 @@ body { display: flex; flex-direction: column; height: 100vh; font-family: monosp
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const SW = 96, SH = 48, SGAP = 10, MARGIN = 0.5;
-const STAGING_X = 105, STAGING_Y = 0;  // area for unplaced shelves
+const STAGING_X = 105, STAGING_Y = 0;
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const S = {
-  geom:          {},    // name → {poly, brackets, cuts, bbox, shelf_type}
-  sheets:        [],    // [{id}]
-  placements:    [],    // [{id, name, sheetIdx, x, y, rot}]  x,y = centroid in SVG global coords
+  geom:          {},   // name → {poly, brackets, cuts, bbox, shelf_type}
+  sheets:        [],   // [{id}]
+  placements:    [],   // [{id, name, sheetIdx, x, y, rot}]  rot = degrees
+  obstacles:     [],   // [{id, sheetIdx, x, y, w, h, label}]  x,y = top-left
   nextPid:       0,
-  selected:      null,  // placement id
+  nextObstId:    0,
+  selected:      null, // placement id
+  selectedObst:  null, // obstacle id
   vb:            {x: -5, y: -5, w: 210, h: 80},
-  drag:          null,  // {pid, ox, oy, sx, sy}
-  pan:           null,  // {sx, sy, vb}
+  drag:          null, // {kind:'piece'|'obst', id, ox,oy,sx,sy}
+  pan:           null, // {sx,sy,vb}
+  blockMode:     false,
   loaded:        false,
-  pendingLayout: null,  // layout JSON waiting for geometry to load
+  pendingLayout: null,
 };
 
-// ─── SVG helpers ──────────────────────────────────────────────────────────────
-const svg   = document.getElementById('mainSvg');
-const vpG   = document.getElementById('vp');
-const shG   = document.getElementById('sheetsG');
-const slvG  = document.getElementById('shelvesG');
-const vilG  = document.getElementById('violsG');
+// ─── SVG elements ─────────────────────────────────────────────────────────────
+const svg    = document.getElementById('mainSvg');
+const vpG    = document.getElementById('vp');
+const shG    = document.getElementById('sheetsG');
+const obsG   = document.getElementById('obstaclesG');
+const slvG   = document.getElementById('shelvesG');
+const vilG   = document.getElementById('violsG');
+const prvG   = document.getElementById('previewG');
 
 function setVB() {
   svg.setAttribute('viewBox', `${S.vb.x} ${S.vb.y} ${S.vb.w} ${S.vb.h}`);
@@ -155,17 +218,17 @@ function el(tag, attrs = {}, cls = '') {
 function ptsToStr(pts) { return pts.map(([x,y]) => `${x},${y}`).join(' '); }
 
 // ─── Geometry ─────────────────────────────────────────────────────────────────
-function rotPt(x, y, turns) {
-  // rotate [x,y] by turns×90° clockwise (SVG Y-down, so clockwise = positive angle)
-  for (let i = 0; i < (turns & 3); i++) { [x, y] = [y, -x]; }
-  return [x, y];
+function rotPt(x, y, deg) {
+  // Rotate [x,y] by deg degrees clockwise (SVG Y-down coordinate system).
+  const r = deg * Math.PI / 180;
+  const c = Math.cos(r), s = Math.sin(r);
+  return [x * c + y * s, -x * s + y * c];
 }
 
 function worldPts(p) {
-  // Transform local shelf polygon to SVG global coordinates
   const g = S.geom[p.name];
   return g.poly.map(([x, y]) => {
-    const [rx, ry] = rotPt(x, y, p.rot);
+    const [rx, ry] = rotPt(p.mirrored ? -x : x, y, p.rot);
     return [rx + p.x, ry + p.y];
   });
 }
@@ -173,7 +236,7 @@ function worldPts(p) {
 function worldBracketPts(p, bidx) {
   const g = S.geom[p.name];
   return g.brackets[bidx].map(([x, y]) => {
-    const [rx, ry] = rotPt(x, y, p.rot);
+    const [rx, ry] = rotPt(p.mirrored ? -x : x, y, p.rot);
     return [rx + p.x, ry + p.y];
   });
 }
@@ -181,7 +244,7 @@ function worldBracketPts(p, bidx) {
 function worldCutPts(p, cidx) {
   const g = S.geom[p.name];
   return g.cuts[cidx].map(([x, y]) => {
-    const [rx, ry] = rotPt(x, y, p.rot);
+    const [rx, ry] = rotPt(p.mirrored ? -x : x, y, p.rot);
     return [rx + p.x, ry + p.y];
   });
 }
@@ -190,6 +253,15 @@ function worldBBox(p) {
   const pts = worldPts(p);
   const xs = pts.map(q => q[0]), ys = pts.map(q => q[1]);
   return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+}
+
+function obstaclePolyPts(obs) {
+  return [
+    [obs.x,       obs.y      ],
+    [obs.x+obs.w, obs.y      ],
+    [obs.x+obs.w, obs.y+obs.h],
+    [obs.x,       obs.y+obs.h],
+  ];
 }
 
 function sheetOriginY(sheetIdx) { return sheetIdx * (SH + SGAP); }
@@ -208,19 +280,14 @@ function polyDist(a, b) {
   const na = a.length, nb = b.length;
   for (let i = 0; i < na; i++) {
     const [ax, ay] = a[i], [bx, by] = a[(i+1) % na];
-    for (let j = 0; j < nb; j++) {
-      const [cx, cy] = b[j];
+    for (const [cx, cy] of b)
       d2 = Math.min(d2, ptSegDist2(cx, cy, ax, ay, bx, by));
-    }
   }
   for (let j = 0; j < nb; j++) {
     const [ax, ay] = b[j], [bx, by] = b[(j+1) % nb];
-    for (let i = 0; i < na; i++) {
-      const [cx, cy] = a[i];
+    for (const [cx, cy] of a)
       d2 = Math.min(d2, ptSegDist2(cx, cy, ax, ay, bx, by));
-    }
   }
-  // Check point-in-polygon (overlap)
   if (pointInPoly(a[0][0], a[0][1], b)) return 0;
   if (pointInPoly(b[0][0], b[0][1], a)) return 0;
   return Math.sqrt(d2);
@@ -238,10 +305,9 @@ function pointInPoly(px, py, poly) {
 
 // ─── Sheets ───────────────────────────────────────────────────────────────────
 function addSheet() {
-  const id = S.sheets.length + 1;
-  S.sheets.push({id});
+  S.sheets.push({id: S.sheets.length + 1});
   renderSheets();
-  setStatus(`Sheet ${id} added.`);
+  setStatus(`Sheet ${S.sheets.length} added.`);
 }
 
 function renderSheets() {
@@ -249,28 +315,63 @@ function renderSheets() {
   S.sheets.forEach((sh, idx) => {
     const oy = sheetOriginY(idx);
     const g = el('g');
-
-    // Background
-    const bg = el('rect', {x:0, y:oy, width:SW, height:SH}, 'sheet-bg');
-    g.appendChild(bg);
-
-    // Foot/12" grid lines
-    for (let x = 12; x < SW; x += 12) {
-      const ln = el('line', {x1:x, y1:oy, x2:x, y2:oy+SH}, 'grid-line');
-      g.appendChild(ln);
-    }
-    for (let y = 12; y < SH; y += 12) {
-      const ln = el('line', {x1:0, y1:oy+y, x2:SW, y2:oy+y}, 'grid-line');
-      g.appendChild(ln);
-    }
-
-    // Label
+    g.appendChild(el('rect', {x:0, y:oy, width:SW, height:SH}, 'sheet-bg'));
+    for (let x = 12; x < SW; x += 12)
+      g.appendChild(el('line', {x1:x,y1:oy,x2:x,y2:oy+SH}, 'grid-line'));
+    for (let y = 12; y < SH; y += 12)
+      g.appendChild(el('line', {x1:0,y1:oy+y,x2:SW,y2:oy+y}, 'grid-line'));
     const lbl = el('text', {x:1, y:oy+3}, 'sheet-lbl');
     lbl.textContent = `Sheet ${sh.id}  (96" × 48")`;
     g.appendChild(lbl);
-
     shG.appendChild(g);
   });
+}
+
+// ─── Obstacle rendering ───────────────────────────────────────────────────────
+function renderObstacle(obs) {
+  let g = document.getElementById(`obs-${obs.id}`);
+  if (g) g.remove();
+
+  g = el('g');
+  g.setAttribute('id', `obs-${obs.id}`);
+  g.setAttribute('data-obsid', obs.id);
+
+  const isSel = S.selectedObst === obs.id;
+
+  // Hatch fill overlay
+  const hatch = el('rect', {x:obs.x, y:obs.y, width:obs.w, height:obs.h}, 'obs-hatch');
+  g.appendChild(hatch);
+
+  // Main rect
+  const cls = 'obs-rect' + (isSel ? ' sel' : '');
+  const rect = el('rect', {x:obs.x, y:obs.y, width:obs.w, height:obs.h}, cls);
+  rect.setAttribute('data-obsid', obs.id);
+  g.appendChild(rect);
+
+  // Label
+  const lbl = el('text', {x: obs.x + obs.w/2, y: obs.y + obs.h/2}, 'obs-label');
+  lbl.textContent = obs.label || 'block';
+  g.appendChild(lbl);
+
+  // Dimension annotation
+  const dim = el('text', {
+    x: obs.x + obs.w/2,
+    y: obs.y + obs.h/2 + 2.5,
+    'font-size': '1.5px',
+    'text-anchor': 'middle',
+    fill: '#c44',
+    'pointer-events': 'none',
+    opacity: '0.8',
+  });
+  dim.textContent = `${obs.w}"×${obs.h}"`;
+  g.appendChild(dim);
+
+  obsG.appendChild(g);
+}
+
+function renderAllObstacles() {
+  obsG.innerHTML = '';
+  for (const obs of S.obstacles) renderObstacle(obs);
 }
 
 // ─── Shelf rendering ──────────────────────────────────────────────────────────
@@ -278,65 +379,52 @@ function renderAll() {
   slvG.innerHTML = '';
   vilG.innerHTML = '';
   for (const p of S.placements) renderPlacement(p);
+  renderAllObstacles();
   renderPalette();
 }
 
-function placementGroup(p) {
-  return document.getElementById(`pl-${p.id}`);
-}
-
 function renderPlacement(p) {
-  let g = placementGroup(p);
-  if (g) g.remove();
+  const existing = document.getElementById(`pl-${p.id}`);
+  if (existing) existing.remove();
 
   const geom = S.geom[p.name];
   if (!geom) return;
 
-  g = el('g');
+  const g = el('g');
   g.setAttribute('id', `pl-${p.id}`);
   g.setAttribute('data-pid', p.id);
 
-  const isSelected = S.selected === p.id;
+  const isSel = S.selected === p.id;
   const wp = worldPts(p);
 
-  // Safety margin stroke (0.5" = stroke-width 1, drawn as outline)
-  const margin = el('polygon', {points: ptsToStr(wp)}, 's-margin');
-  g.appendChild(margin);
+  g.appendChild(el('polygon', {points: ptsToStr(wp)}, 's-margin'));
 
-  // Main polygon
-  const poly = el('polygon', {points: ptsToStr(wp)},
-    's-poly' + (isSelected ? ' sel' : ''));
+  const hasFeatures = geom.brackets.length > 0;
+  const mirrorRisky = p.mirrored && hasFeatures;
+  const polyCls = 's-poly' + (isSel ? ' sel' : '') + (mirrorRisky ? ' mirrored-risky' : '');
+  const poly = el('polygon', {points: ptsToStr(wp)}, polyCls);
   poly.setAttribute('data-pid', p.id);
   g.appendChild(poly);
 
-  // Brackets
   geom.brackets.forEach((_, i) => {
     const bp = worldBracketPts(p, i);
-    const br = el('polygon', {points: ptsToStr(bp)}, 's-bracket');
-    g.appendChild(br);
+    g.appendChild(el('polygon', {points: ptsToStr(bp)}, 's-bracket'));
   });
-
-  // Cuts
   geom.cuts.forEach((_, i) => {
     const cp = worldCutPts(p, i);
     if (cp.length < 2) return;
-    const cut = el('polyline', {points: ptsToStr(cp)}, 's-cut');
-    g.appendChild(cut);
+    g.appendChild(el('polyline', {points: ptsToStr(cp)}, 's-cut'));
   });
 
-  // Label
   const lbl = el('text', {x: p.x, y: p.y}, 's-label');
   lbl.textContent = p.name.replace('shelf_', '');
   g.appendChild(lbl);
 
-  // Out-of-bounds highlight
   if (p.sheetIdx >= 0) {
     const oy = sheetOriginY(p.sheetIdx);
     const [x0, y0, x1, y1] = worldBBox(p);
-    if (x0 < 0 || y0 < oy || x1 > SW || y1 > oy + SH) {
-      const oob = el('polygon', {points: ptsToStr(wp)}, 's-outofbounds');
-      g.appendChild(oob);
-    }
+    if (x0 < 0 || y0 < oy || x1 > SW || y1 > oy + SH)
+      g.appendChild(el('polygon', {points: ptsToStr(wp)}, 's-outofbounds'));
   }
 
   slvG.appendChild(g);
@@ -346,36 +434,31 @@ function renderPlacement(p) {
 function renderPalette() {
   const list = document.getElementById('paletteList');
   list.innerHTML = '';
-
   const placedNames = new Set(S.placements.filter(p => p.sheetIdx >= 0).map(p => p.name));
-
   Object.keys(S.geom).sort().forEach(name => {
     const placed = placedNames.has(name);
-    const geom = S.geom[name];
-    const [x0,y0,x1,y1] = geom.bbox;
+    const g = S.geom[name];
+    const [x0,y0,x1,y1] = g.bbox;
     const w = (x1-x0).toFixed(1), h = (y1-y0).toFixed(1);
+    const hasFeatures = g.brackets && g.brackets.length > 0;
     const div = document.createElement('div');
-    div.className = 'pitem' + (placed ? ' placed' : '');
+    div.className = 'pitem' + (placed ? ' placed' : '') + (hasFeatures ? ' risky' : '');
+    div.title = placed
+      ? 'Already placed'
+      : hasFeatures
+        ? 'Click to place — has features (pockets); mirror with caution'
+        : 'Click to place on Sheet 1';
     div.innerHTML = `<span>${name.replace('shelf_','')}</span><span class="pdim">${w}×${h}</span>`;
-    div.title = placed ? 'Already placed on a sheet' : 'Click to place on Sheet 1 (or drag from canvas)';
-    if (!placed) {
-      div.addEventListener('click', () => placeOnSheet(name, 0));
-    }
+    if (!placed) div.addEventListener('click', () => placeOnSheet(name, 0));
     list.appendChild(div);
   });
 }
 
 function placeOnSheet(name, sheetIdx) {
-  // Remove any staging placement first
   const existing = S.placements.findIndex(p => p.name === name && p.sheetIdx < 0);
   if (existing >= 0) S.placements.splice(existing, 1);
-
   const oy = sheetOriginY(sheetIdx);
-  const p = {
-    id: S.nextPid++, name,
-    sheetIdx, x: SW / 2, y: oy + SH / 2,
-    rot: 0,
-  };
+  const p = {id: S.nextPid++, name, sheetIdx, x: SW/2, y: oy+SH/2, rot: 0, mirrored: false};
   S.placements.push(p);
   renderAll();
   select(p.id);
@@ -384,19 +467,137 @@ function placeOnSheet(name, sheetIdx) {
 // ─── Selection ────────────────────────────────────────────────────────────────
 function select(pid) {
   S.selected = pid;
-  // Re-render just the two affected placements (fast)
-  for (const p of S.placements) {
-    renderPlacement(p);
-  }
+  S.selectedObst = null;
+  for (const p of S.placements) renderPlacement(p);
+  renderAllObstacles();
+  syncRotControls();
+  syncMirrorButton();
+}
+
+function selectObst(obsId) {
+  S.selectedObst = obsId;
+  S.selected = null;
+  for (const p of S.placements) renderPlacement(p);
+  renderAllObstacles();
+  syncRotControls();
+  syncMirrorButton();
 }
 
 // ─── Rotation ─────────────────────────────────────────────────────────────────
-function rotateSelected() {
+function rotateSelected(addDeg) {
   if (S.selected === null) return;
   const p = S.placements.find(q => q.id === S.selected);
   if (!p) return;
-  p.rot = (p.rot + 1) & 3;
+  p.rot = ((p.rot + addDeg) % 360 + 360) % 360;
   renderPlacement(p);
+  syncRotControls();
+}
+
+function syncRotControls() {
+  const p = S.selected !== null ? S.placements.find(q => q.id === S.selected) : null;
+  const deg = p ? Math.round(p.rot) : 0;
+  const slider = document.getElementById('rotSlider');
+  const num    = document.getElementById('rotNum');
+  slider.value = deg;
+  num.value    = deg;
+  slider.disabled = !p;
+  num.disabled    = !p;
+}
+
+// ─── Mirror ───────────────────────────────────────────────────────────────────
+function mirrorSelected() {
+  if (S.selected === null) return;
+  const p = S.placements.find(q => q.id === S.selected);
+  if (!p) return;
+  p.mirrored = !p.mirrored;
+  renderPlacement(p);
+  syncMirrorButton();
+  vilG.innerHTML = '';
+  document.getElementById('checkResult').textContent = '';
+}
+
+function syncMirrorButton() {
+  const btn = document.getElementById('btnMirror');
+  const p = S.selected !== null ? S.placements.find(q => q.id === S.selected) : null;
+  const g = p ? S.geom[p.name] : null;
+  const hasFeatures = g && g.brackets && g.brackets.length > 0;
+  const isMirrored = p?.mirrored ?? false;
+  btn.classList.toggle('active', isMirrored && !hasFeatures);
+  btn.classList.toggle('mirror-warn', isMirrored && hasFeatures);
+  btn.disabled = !p;
+  btn.title = hasFeatures
+    ? 'Mirror — this piece has bracket pockets that may not align correctly when flipped. Key: M'
+    : 'Mirror — Key: M';
+}
+
+document.getElementById('rotSlider').addEventListener('input', e => {
+  if (S.selected === null) return;
+  const p = S.placements.find(q => q.id === S.selected);
+  if (!p) return;
+  p.rot = +e.target.value;
+  document.getElementById('rotNum').value = p.rot;
+  renderPlacement(p);
+});
+
+document.getElementById('rotNum').addEventListener('change', e => {
+  if (S.selected === null) return;
+  const p = S.placements.find(q => q.id === S.selected);
+  if (!p) return;
+  p.rot = ((+e.target.value) % 360 + 360) % 360;
+  document.getElementById('rotSlider').value = Math.round(p.rot);
+  e.target.value = Math.round(p.rot * 10) / 10;
+  renderPlacement(p);
+});
+
+// ─── Block (obstacle) placement ───────────────────────────────────────────────
+function setBlockMode(on) {
+  S.blockMode = on;
+  document.getElementById('btnAddBlock').classList.toggle('active', on);
+  svg.classList.toggle('block-mode', on);
+  setStatus(on
+    ? 'Block mode: click on a sheet to place the obstacle. ESC to cancel.'
+    : 'Block mode off.');
+}
+
+function placeObstacle(svgX, svgY) {
+  const w = +document.getElementById('blockW').value || 12;
+  const h = +document.getElementById('blockH').value || 6;
+  const label = document.getElementById('blockLabel').value.trim() || 'Reserved';
+
+  // Snap to nearest sheet
+  let sheetIdx = -1, bestDist = Infinity;
+  S.sheets.forEach((_, idx) => {
+    const oy = sheetOriginY(idx);
+    const d = Math.abs(svgY - (oy + SH/2));
+    if (d < bestDist) { bestDist = d; sheetIdx = idx; }
+  });
+
+  if (sheetIdx < 0 || S.sheets.length === 0) {
+    setStatus('Add a sheet first.');
+    return;
+  }
+
+  const obs = {
+    id: S.nextObstId++,
+    sheetIdx,
+    x: svgX - w/2,
+    y: svgY - h/2,
+    w, h, label,
+  };
+  S.obstacles.push(obs);
+  renderObstacle(obs);
+  selectObst(obs.id);
+  setBlockMode(false);
+  setStatus(`Block "${label}" placed (${w}"×${h}"). Drag to reposition; Delete to remove.`);
+}
+
+function deleteSelectedObstacle() {
+  if (S.selectedObst === null) return;
+  S.obstacles = S.obstacles.filter(o => o.id !== S.selectedObst);
+  S.selectedObst = null;
+  renderAllObstacles();
+  vilG.innerHTML = '';
+  document.getElementById('checkResult').textContent = '';
 }
 
 // ─── Check clearances ────────────────────────────────────────────────────────
@@ -405,42 +606,50 @@ function checkClearances() {
   const ps = S.placements.filter(p => p.sheetIdx >= 0);
   let violations = 0, oob = 0;
 
-  // Remove old violation classes
   for (const p of ps) {
     const pg = document.getElementById(`pl-${p.id}`);
-    if (pg) {
-      const poly = pg.querySelector('.s-poly');
-      if (poly) { poly.classList.remove('viol'); }
-    }
+    if (pg) pg.querySelector('.s-poly')?.classList.remove('viol');
+  }
+  for (const obs of S.obstacles) {
+    const og = document.getElementById(`obs-${obs.id}`);
+    if (og) og.querySelector('.obs-rect')?.classList.remove('viol');
   }
 
-  // Out-of-bounds
+  // Out-of-bounds check
   for (const p of ps) {
     const oy = sheetOriginY(p.sheetIdx);
     const [x0, y0, x1, y1] = worldBBox(p);
-    if (x0 < -0.001 || y0 < oy - 0.001 || x1 > SW + 0.001 || y1 > oy + SH + 0.001) {
+    if (x0 < -0.001 || y0 < oy-0.001 || x1 > SW+0.001 || y1 > oy+SH+0.001) {
       oob++;
-      markViol(p);
+      markPieceViol(p);
     }
   }
 
-  // Inter-shelf clearance (only shelves on same sheet)
+  // Piece–piece clearance
   for (let i = 0; i < ps.length; i++) {
-    for (let j = i + 1; j < ps.length; j++) {
+    for (let j = i+1; j < ps.length; j++) {
       if (ps[i].sheetIdx !== ps[j].sheetIdx) continue;
-      const d = polyDist(worldPts(ps[i]), worldPts(ps[j]));
-      if (d < MARGIN - 0.01) {
+      if (polyDist(worldPts(ps[i]), worldPts(ps[j])) < MARGIN - 0.01) {
         violations++;
-        markViol(ps[i]);
-        markViol(ps[j]);
-        // Draw a gap line between centroids
-        const ln = el('line', {
-          x1: ps[i].x, y1: ps[i].y,
-          x2: ps[j].x, y2: ps[j].y,
-          stroke: '#ff3300', 'stroke-width': '0.12',
-          'stroke-dasharray': '0.4 0.2'
-        });
-        vilG.appendChild(ln);
+        markPieceViol(ps[i]);
+        markPieceViol(ps[j]);
+        vilG.appendChild(el('line', {
+          x1: ps[i].x, y1: ps[i].y, x2: ps[j].x, y2: ps[j].y,
+          stroke: '#ff3300', 'stroke-width': '0.12', 'stroke-dasharray': '0.4 0.2'
+        }));
+      }
+    }
+  }
+
+  // Piece–obstacle clearance
+  for (const obs of S.obstacles) {
+    const obsPts = obstaclePolyPts(obs);
+    for (const p of ps) {
+      if (p.sheetIdx !== obs.sheetIdx) continue;
+      if (polyDist(worldPts(p), obsPts) < MARGIN - 0.01) {
+        violations++;
+        markPieceViol(p);
+        markObstViol(obs);
       }
     }
   }
@@ -458,38 +667,73 @@ function checkClearances() {
   }
 }
 
-function markViol(p) {
-  const pg = document.getElementById(`pl-${p.id}`);
-  if (!pg) return;
-  const poly = pg.querySelector('.s-poly');
-  if (poly) poly.classList.add('viol');
+function markPieceViol(p) {
+  document.getElementById(`pl-${p.id}`)?.querySelector('.s-poly')?.classList.add('viol');
+}
+function markObstViol(obs) {
+  document.getElementById(`obs-${obs.id}`)?.querySelector('.obs-rect')?.classList.add('viol');
+}
+
+// ─── Snap to edge ─────────────────────────────────────────────────────────────
+function snapToEdge(dir) {
+  if (S.selected === null) { setStatus('Select a shelf first.'); return; }
+  const p = S.placements.find(q => q.id === S.selected);
+  if (!p || p.sheetIdx < 0) { setStatus('Shelf must be on a sheet.'); return; }
+  const oy = sheetOriginY(p.sheetIdx);
+  const [x0, y0, x1, y1] = worldBBox(p);
+  const off = parseFloat(document.getElementById('snapOffset').value) || 0;
+  if      (dir === 'top')    p.y += (oy + off) - y0;
+  else if (dir === 'bottom') p.y += (oy + SH - off) - y1;
+  else if (dir === 'left')   p.x += off - x0;
+  else if (dir === 'right')  p.x += (SW - off) - x1;
+  renderPlacement(p);
+  vilG.innerHTML = '';
+  document.getElementById('checkResult').textContent = '';
 }
 
 // ─── Export / Import ──────────────────────────────────────────────────────────
 function exportLayout() {
-  checkClearances(); // validate first
+  checkClearances();
 
-  // Build per-sheet shelf lists
   const sheetMap = {};
   for (const p of S.placements) {
-    if (p.sheetIdx < 0) continue;  // skip unplaced
-    const sid = S.sheets[p.sheetIdx]?.id ?? (p.sheetIdx + 1);
+    if (p.sheetIdx < 0) continue;
+    const sid = S.sheets[p.sheetIdx]?.id ?? (p.sheetIdx+1);
     if (!sheetMap[sid]) sheetMap[sid] = [];
     const oy = sheetOriginY(p.sheetIdx);
     sheetMap[sid].push({
       name: p.name,
       x: +(p.x).toFixed(4),
-      y: +(p.y - oy).toFixed(4),  // sheet-local Y
-      rotation: p.rot,
+      y: +(p.y - oy).toFixed(4),
+      rotation: +(p.rot).toFixed(2),  // degrees
+      mirrored: p.mirrored ?? false,
+    });
+  }
+
+  // Group obstacles by sheet id
+  const obstMap = {};
+  for (const obs of S.obstacles) {
+    if (obs.sheetIdx < 0) continue;
+    const sid = S.sheets[obs.sheetIdx]?.id ?? (obs.sheetIdx+1);
+    if (!obstMap[sid]) obstMap[sid] = [];
+    const oy = sheetOriginY(obs.sheetIdx);
+    obstMap[sid].push({
+      x:     +(obs.x).toFixed(4),
+      y:     +(obs.y - oy).toFixed(4),
+      w:     +(obs.w).toFixed(4),
+      h:     +(obs.h).toFixed(4),
+      label: obs.label,
     });
   }
 
   const out = {
+    format_version: 2,
     sheets: S.sheets
-      .filter((sh, idx) => sheetMap[sh.id])
-      .map((sh, idx) => ({
+      .filter((sh, idx) => sheetMap[sh.id] || obstMap[sh.id])
+      .map(sh => ({
         id: sh.id,
-        shelves: sheetMap[sh.id] ?? [],
+        shelves:   sheetMap[sh.id]   ?? [],
+        obstacles: obstMap[sh.id]    ?? [],
       }))
   };
 
@@ -498,86 +742,133 @@ function exportLayout() {
   a.href = URL.createObjectURL(blob);
   a.download = 'nesting_layout.json';
   a.click();
-  setStatus('Layout exported to nesting_layout.json');
+  setStatus('Layout exported.');
 }
 
 function importLayout(data) {
   S.placements = [];
-  S.nextPid = 0;
-  S.sheets = [];
+  S.obstacles  = [];
+  S.nextPid    = 0;
+  S.nextObstId = 0;
+  S.sheets     = [];
+
+  // Rotations: format_version ≥ 2 → degrees; otherwise quarter-turns × 90
+  const v2 = (data.format_version ?? 1) >= 2;
 
   for (const sh of data.sheets) {
     const sheetIdx = S.sheets.length;
     S.sheets.push({id: sh.id});
     const oy = sheetOriginY(sheetIdx);
-    for (const item of sh.shelves) {
-      if (!S.geom[item.name]) {
-        console.warn('Unknown shelf:', item.name);
-        continue;
-      }
+
+    for (const item of (sh.shelves ?? [])) {
+      if (!S.geom[item.name]) { console.warn('Unknown shelf:', item.name); continue; }
+      const rawRot = item.rotation ?? 0;
+      const deg = v2 ? rawRot : rawRot * 90;
       S.placements.push({
-        id: S.nextPid++,
-        name: item.name,
+        id: S.nextPid++, name: item.name,
+        sheetIdx, x: item.x, y: item.y + oy,
+        rot: deg, mirrored: item.mirrored ?? false,
+      });
+    }
+
+    for (const obs of (sh.obstacles ?? [])) {
+      S.obstacles.push({
+        id: S.nextObstId++,
         sheetIdx,
-        x: item.x,
-        y: item.y + oy,
-        rot: item.rotation ?? 0,
+        x: obs.x,
+        y: obs.y + oy,
+        w: obs.w, h: obs.h,
+        label: obs.label ?? 'Reserved',
       });
     }
   }
 
-  // Ensure at least one sheet
   if (S.sheets.length === 0) S.sheets.push({id: 1});
 
   renderSheets();
   renderAll();
 
-  // Reset view to show all sheets
-  const numSheets = S.sheets.length;
-  const totalH = numSheets * (SH + SGAP) + 10;
+  const totalH = S.sheets.length * (SH + SGAP) + 10;
   S.vb = {x: -5, y: -5, w: SW + 15, h: totalH};
   setVB();
-
-  setStatus(`Layout loaded: ${S.placements.length} shelves on ${numSheets} sheet(s).`);
+  setStatus(`Layout loaded: ${S.placements.length} shelves, ${S.obstacles.length} obstacles on ${S.sheets.length} sheet(s).`);
 }
 
-// ─── Drag & drop ─────────────────────────────────────────────────────────────
+// ─── Mouse: drag & pan & block placement ─────────────────────────────────────
 let lastTouches = null;
 
 svg.addEventListener('mousedown', e => {
-  const target = e.target.closest('[data-pid]');
-  if (target) {
-    const pid = +target.dataset.pid;
+  const sp = svgPt(e);
+
+  // Block placement mode: left-click places obstacle
+  if (S.blockMode && e.button === 0) {
+    placeObstacle(sp.x, sp.y);
+    e.preventDefault();
+    return;
+  }
+
+  // Click on an obstacle
+  const obsTarget = e.target.closest('[data-obsid]');
+  if (obsTarget && e.button === 0) {
+    const obsId = +obsTarget.dataset.obsid;
+    selectObst(obsId);
+    const obs = S.obstacles.find(o => o.id === obsId);
+    if (obs) S.drag = {kind:'obst', id:obsId, ox:obs.x, oy:obs.y, sx:sp.x, sy:sp.y};
+    e.preventDefault();
+    return;
+  }
+
+  // Click on a piece
+  const pieceTarget = e.target.closest('[data-pid]');
+  if (pieceTarget && e.button === 0) {
+    const pid = +pieceTarget.dataset.pid;
     select(pid);
-    const sp = svgPt(e);
     const p = S.placements.find(q => q.id === pid);
-    S.drag = {pid, ox: p.x, oy: p.y, sx: sp.x, sy: sp.y};
+    if (p) S.drag = {kind:'piece', id:pid, ox:p.x, oy:p.y, sx:sp.x, sy:sp.y};
     e.preventDefault();
-  } else if (e.button === 1 || (e.button === 0 && e.altKey)) {
-    // Middle mouse or Alt+drag = pan
-    const sp = svgPt(e);
-    S.pan = {sx: sp.x, sy: sp.y, vb: {...S.vb}};
+    return;
+  }
+
+  // Pan (middle-click or Alt+left)
+  if (e.button === 1 || (e.button === 0 && e.altKey)) {
+    S.pan = {sx:sp.x, sy:sp.y, vb:{...S.vb}};
     e.preventDefault();
-  } else if (e.button === 0) {
-    // Click empty = deselect
+    return;
+  }
+
+  // Click empty = deselect
+  if (e.button === 0) {
     S.selected = null;
+    S.selectedObst = null;
     renderAll();
+    syncRotControls();
+    syncMirrorButton();
   }
 });
 
 svg.addEventListener('mousemove', e => {
   if (S.drag) {
     const sp = svgPt(e);
-    const p = S.placements.find(q => q.id === S.drag.pid);
-    if (p) {
-      p.x = S.drag.ox + (sp.x - S.drag.sx);
-      p.y = S.drag.oy + (sp.y - S.drag.sy);
-      // Snap to nearest sheet
-      updateSheetIdx(p);
-      renderPlacement(p);
-      vilG.innerHTML = '';
-      document.getElementById('checkResult').textContent = '';
+    const dx = sp.x - S.drag.sx, dy = sp.y - S.drag.sy;
+    if (S.drag.kind === 'piece') {
+      const p = S.placements.find(q => q.id === S.drag.id);
+      if (p) {
+        p.x = S.drag.ox + dx;
+        p.y = S.drag.oy + dy;
+        updateSheetIdx(p);
+        renderPlacement(p);
+      }
+    } else if (S.drag.kind === 'obst') {
+      const obs = S.obstacles.find(o => o.id === S.drag.id);
+      if (obs) {
+        obs.x = S.drag.ox + dx;
+        obs.y = S.drag.oy + dy;
+        updateObstSheetIdx(obs);
+        renderObstacle(obs);
+      }
     }
+    vilG.innerHTML = '';
+    document.getElementById('checkResult').textContent = '';
   } else if (S.pan) {
     const sp = svgPt(e);
     S.vb.x = S.pan.vb.x - (sp.x - S.pan.sx);
@@ -586,99 +877,98 @@ svg.addEventListener('mousemove', e => {
   }
 });
 
-svg.addEventListener('mouseup', () => { S.drag = null; S.pan = null; });
-svg.addEventListener('mouseleave', () => { S.drag = null; S.pan = null; });
+svg.addEventListener('mouseup',   () => { S.drag = null; S.pan = null; });
+svg.addEventListener('mouseleave',() => { S.drag = null; S.pan = null; });
 
 function updateSheetIdx(p) {
-  // Assign shelf to the sheet it's mostly inside
-  const cy = p.y;
   let best = -1, bestDist = Infinity;
   S.sheets.forEach((_, idx) => {
-    const oy = sheetOriginY(idx);
-    const mid = oy + SH / 2;
-    const d = Math.abs(cy - mid);
+    const d = Math.abs(p.y - (sheetOriginY(idx) + SH/2));
     if (d < bestDist) { bestDist = d; best = idx; }
   });
   p.sheetIdx = best;
+}
+
+function updateObstSheetIdx(obs) {
+  let best = -1, bestDist = Infinity;
+  const cy = obs.y + obs.h/2;
+  S.sheets.forEach((_, idx) => {
+    const d = Math.abs(cy - (sheetOriginY(idx) + SH/2));
+    if (d < bestDist) { bestDist = d; best = idx; }
+  });
+  obs.sheetIdx = best;
 }
 
 // ─── Zoom ──────────────────────────────────────────────────────────────────────
 svg.addEventListener('wheel', e => {
   e.preventDefault();
   const sp = svgPt(e);
-  const factor = e.deltaY > 0 ? 1.12 : 1 / 1.12;
-  S.vb.w *= factor;
-  S.vb.h *= factor;
-  // Keep the point under cursor fixed
-  S.vb.x = sp.x - (sp.x - S.vb.x) * factor;
-  S.vb.y = sp.y - (sp.y - S.vb.y) * factor;
+  const factor = e.deltaY > 0 ? 1.12 : 1/1.12;
+  S.vb.w *= factor; S.vb.h *= factor;
+  S.vb.x = sp.x - (sp.x - S.vb.x)*factor;
+  S.vb.y = sp.y - (sp.y - S.vb.y)*factor;
   setVB();
 }, {passive: false});
 
 // Pinch zoom
 svg.addEventListener('touchstart', e => {
-  if (e.touches.length === 2) {
-    lastTouches = e.touches;
-    e.preventDefault();
-  }
+  if (e.touches.length === 2) { lastTouches = e.touches; e.preventDefault(); }
 }, {passive: false});
-
 svg.addEventListener('touchmove', e => {
   if (e.touches.length === 2 && lastTouches) {
     const prev = lastTouches, cur = e.touches;
-    const prevDist = Math.hypot(prev[0].clientX - prev[1].clientX, prev[0].clientY - prev[1].clientY);
-    const curDist  = Math.hypot(cur[0].clientX  - cur[1].clientX,  cur[0].clientY  - cur[1].clientY);
-    if (prevDist > 1) {
-      const factor = prevDist / curDist;
-      const cx = (cur[0].clientX + cur[1].clientX) / 2;
-      const cy = (cur[0].clientY + cur[1].clientY) / 2;
-      const sp = svgPt({clientX: cx, clientY: cy});
-      S.vb.w *= factor; S.vb.h *= factor;
-      S.vb.x = sp.x - (sp.x - S.vb.x) * factor;
-      S.vb.y = sp.y - (sp.y - S.vb.y) * factor;
+    const prevD = Math.hypot(prev[0].clientX-prev[1].clientX, prev[0].clientY-prev[1].clientY);
+    const curD  = Math.hypot(cur[0].clientX-cur[1].clientX,  cur[0].clientY-cur[1].clientY);
+    if (prevD > 1) {
+      const f = prevD/curD;
+      const sp = svgPt({clientX:(cur[0].clientX+cur[1].clientX)/2, clientY:(cur[0].clientY+cur[1].clientY)/2});
+      S.vb.w *= f; S.vb.h *= f;
+      S.vb.x = sp.x - (sp.x - S.vb.x)*f;
+      S.vb.y = sp.y - (sp.y - S.vb.y)*f;
       setVB();
     }
     lastTouches = cur;
     e.preventDefault();
   }
 }, {passive: false});
-
 svg.addEventListener('touchend', () => { lastTouches = null; });
 
 // ─── Keyboard ─────────────────────────────────────────────────────────────────
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-  if (e.key === 'r' || e.key === 'R') rotateSelected();
+  if (e.key === 'r' || e.key === 'R') rotateSelected(90);
+  if (e.key === 'm' || e.key === 'M') mirrorSelected();
   if (e.key === 'c' || e.key === 'C') checkClearances();
   if (e.key === 'e' || e.key === 'E') exportLayout();
-  if (e.key === 'Escape') { S.selected = null; renderAll(); }
+  if (e.key === 'b' || e.key === 'B') setBlockMode(!S.blockMode);
+  if (e.key === 'Delete' || e.key === 'Backspace') deleteSelectedObstacle();
+  if (e.key === 'Escape') {
+    if (S.blockMode) { setBlockMode(false); return; }
+    S.selected = null;
+    S.selectedObst = null;
+    renderAll();
+    syncRotControls();
+    syncMirrorButton();
+  }
+  // Arrow-key nudge for selected piece
+  if (S.selected !== null) {
+    const p = S.placements.find(q => q.id === S.selected);
+    if (!p) return;
+    const d = e.shiftKey ? 1 : 0.125;
+    if (e.key === 'ArrowLeft')  { p.x -= d; renderPlacement(p); e.preventDefault(); }
+    if (e.key === 'ArrowRight') { p.x += d; renderPlacement(p); e.preventDefault(); }
+    if (e.key === 'ArrowUp')    { p.y -= d; renderPlacement(p); e.preventDefault(); }
+    if (e.key === 'ArrowDown')  { p.y += d; renderPlacement(p); e.preventDefault(); }
+  }
 });
 
 // ─── Button wiring ────────────────────────────────────────────────────────────
-// ─── Snap to edge ─────────────────────────────────────────────────────────────
-function snapToEdge(dir) {
-  if (S.selected === null) { setStatus('Select a shelf first.'); return; }
-  const p = S.placements.find(q => q.id === S.selected);
-  if (!p || p.sheetIdx < 0) { setStatus('Shelf must be on a sheet.'); return; }
-
-  const oy = sheetOriginY(p.sheetIdx);
-  const [x0, y0, x1, y1] = worldBBox(p);
-
-  const off = parseFloat(document.getElementById('snapOffset').value) || 0;
-  if      (dir === 'top')    p.y += (oy + off) - y0;
-  else if (dir === 'bottom') p.y += (oy + SH - off) - y1;
-  else if (dir === 'left')   p.x += off - x0;
-  else if (dir === 'right')  p.x += (SW - off) - x1;
-
-  renderPlacement(p);
-  vilG.innerHTML = '';
-  document.getElementById('checkResult').textContent = '';
-}
-
-document.getElementById('btnRotate').onclick     = rotateSelected;
+document.getElementById('btnRotate').onclick     = () => rotateSelected(90);
+document.getElementById('btnMirror').onclick     = mirrorSelected;
 document.getElementById('btnCheck').onclick      = checkClearances;
 document.getElementById('btnExport').onclick     = exportLayout;
 document.getElementById('btnAddSheet').onclick   = addSheet;
+document.getElementById('btnAddBlock').onclick   = () => setBlockMode(!S.blockMode);
 document.getElementById('btnSnapTop').onclick    = () => snapToEdge('top');
 document.getElementById('btnSnapBottom').onclick = () => snapToEdge('bottom');
 document.getElementById('btnSnapLeft').onclick   = () => snapToEdge('left');
@@ -686,10 +976,10 @@ document.getElementById('btnSnapRight').onclick  = () => snapToEdge('right');
 
 document.getElementById('btnLoadGeom').onclick = () =>
   document.getElementById('fileGeom').click();
-
 document.getElementById('btnLoadLayout').onclick = () =>
   document.getElementById('fileLayout').click();
 
+// ─── File loading ─────────────────────────────────────────────────────────────
 document.getElementById('fileGeom').addEventListener('change', e => {
   const f = e.target.files[0]; if (!f) return;
   const r = new FileReader();
@@ -697,9 +987,7 @@ document.getElementById('fileGeom').addEventListener('change', e => {
     try {
       S.geom = JSON.parse(ev.target.result);
       S.loaded = true;
-      // Init staging: all shelves placed off-sheet in a grid
-      S.placements = [];
-      S.nextPid = 0;
+      S.placements = []; S.nextPid = 0;
       if (S.sheets.length === 0) S.sheets.push({id: 1});
       const names = Object.keys(S.geom).sort();
       let col = 0, row = 0;
@@ -707,30 +995,20 @@ document.getElementById('fileGeom').addEventListener('change', e => {
       for (const name of names) {
         const g = S.geom[name];
         const [x0,y0,x1,y1] = g.bbox;
-        const pw = x1-x0, ph = y1-y0;
-        const sx = STAGING_X + col * (SW / COLS) + (SW / COLS) / 2;
-        const sy = STAGING_Y + row * (Math.max(ph, 10) + 2) + (Math.max(ph, 10) + 2) / 2;
-        S.placements.push({id: S.nextPid++, name, sheetIdx: -1, x: sx, y: sy, rot: 0});
+        const ph = y1-y0;
+        const sx = STAGING_X + col*(SW/COLS) + (SW/COLS)/2;
+        const sy = STAGING_Y + row*(Math.max(ph,10)+2) + (Math.max(ph,10)+2)/2;
+        S.placements.push({id:S.nextPid++, name, sheetIdx:-1, x:sx, y:sy, rot:0, mirrored:false});
         col++;
         if (col >= COLS) { col = 0; row++; }
       }
-      renderSheets();
-      renderAll();
-      // Fit view: show sheets and staging area
-      const totalH = S.sheets.length * (SH + SGAP) + 20;
-      S.vb = {x: -5, y: -5, w: STAGING_X + SW + 10, h: totalH};
+      renderSheets(); renderAll();
+      const totalH = S.sheets.length*(SH+SGAP)+20;
+      S.vb = {x:-5, y:-5, w:STAGING_X+SW+10, h:totalH};
       setVB();
-
-      // Auto-apply a layout that was loaded before geometry was ready
-      if (S.pendingLayout) {
-        importLayout(S.pendingLayout);
-        S.pendingLayout = null;
-      } else {
-        setStatus(`Loaded ${names.length} shelves. Drag them onto sheets.`);
-      }
-    } catch(err) {
-      alert('Error parsing geometry JSON: ' + err.message);
-    }
+      if (S.pendingLayout) { importLayout(S.pendingLayout); S.pendingLayout = null; }
+      else setStatus(`Loaded ${names.length} shelves. Drag them onto sheets.`);
+    } catch(err) { alert('Error parsing geometry JSON: ' + err.message); }
   };
   r.readAsText(f);
   e.target.value = '';
@@ -743,7 +1021,6 @@ document.getElementById('fileLayout').addEventListener('change', e => {
     try {
       const data = JSON.parse(ev.target.result);
       if (!S.loaded) {
-        // Geometry not loaded yet — stash layout and prompt for geometry
         S.pendingLayout = data;
         setStatus('Layout queued — now load nesting_geometry.json to restore.');
         document.getElementById('fileGeom').click();
@@ -759,15 +1036,15 @@ document.getElementById('fileLayout').addEventListener('change', e => {
 // ─── Utilities ────────────────────────────────────────────────────────────────
 function setStatus(msg) { document.getElementById('status').textContent = msg; }
 
-// ─── Project context from URL param ──────────────────────────────────────────
+// ─── Project label from URL ───────────────────────────────────────────────────
 const _urlProject = new URLSearchParams(window.location.search).get('project');
-if (_urlProject) {
-  document.getElementById('projectLabel').textContent = '[' + _urlProject + ']';
-}
+if (_urlProject) document.getElementById('projectLabel').textContent = '[' + _urlProject + ']';
 
-// ─── Initial sheet ────────────────────────────────────────────────────────────
+// ─── Initial state ────────────────────────────────────────────────────────────
 S.sheets.push({id: 1});
 renderSheets();
+syncRotControls();
+syncMirrorButton();
 </script>
 </body>
 </html>

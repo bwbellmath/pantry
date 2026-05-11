@@ -81,7 +81,8 @@ def main_support_specs(cfg, bottoms, width, my_tab_z_ranges, z_top):
     Notches: 1.75" deep into the board, height s.
     Tabs:    s deep past the right edge, height = each tab's z range.
     """
-    s = cfg['stock_thickness']
+    s  = cfg['stock_thickness']
+    vs = cfg['vertical_stock_thickness']
     inset = cfg['shelf']['main_inset_step']      # 1.75"
     bottom_open = any(abs(h) < 1e-9 for h in bottoms)
 
@@ -107,10 +108,10 @@ def main_support_specs(cfg, bottoms, width, my_tab_z_ranges, z_top):
                 specs.append({"xy": (width,         h + s)})                   # convex
         else:
             _, z1, z2 = f
-            specs.append({"xy": (width,     z1), "dogbone": True})         # base, concave
-            specs.append({"xy": (width + s, z1)})                          # outer, convex
-            specs.append({"xy": (width + s, z2)})                          # outer, convex
-            specs.append({"xy": (width,     z2), "dogbone": True})         # base, concave
+            specs.append({"xy": (width,      z1), "dogbone": True})        # base, concave
+            specs.append({"xy": (width + vs, z1)})                         # outer, convex
+            specs.append({"xy": (width + vs, z2)})                         # outer, convex
+            specs.append({"xy": (width,      z2), "dogbone": True})        # base, concave
 
     # Top edge
     specs.append({"xy": (width, z_top)})
@@ -240,7 +241,7 @@ def extra_support_points(cfg, bottoms, side, z_top, n_sin_samples=600):
     return poly
 
 
-def outer_curve_arcs(cfg):
+def outer_curve_arcs(cfg, right_arm_ext=0.0):
     """Three-arc 'smooth front' of the shelf, returned as a single point list.
 
     Topology (S-curve): arc A (convex, right-turn) → straight ↓ → arc B (concave,
@@ -256,7 +257,8 @@ def outer_curve_arcs(cfg):
       B: (dx + r + 1,       dy + r + 1)     ← user-tuned (cx shifted right by r for style);
                                               bottom tangent (cx_B, dy + 1).
                                               r=4 → center (16.3125, 12.75)
-      C: (dx + mx + rx − r, dy − r + 1)     ← user spec; r=4 → (28.0625, 4.75)
+      C: (dx + mx + rx + right_arm_ext − r, dy − r + 1)  ← shifts right with extension;
+                                              r=4, no ext → (28.0625, 4.75)
     """
     s   = cfg['stock_thickness']
     dx  = cfg['dihedral']['x_extent']
@@ -267,7 +269,7 @@ def outer_curve_arcs(cfg):
     r   = cfg['shelf']['outer_arc_radius']
 
     cx_B, cy_B = dx + r + 1, dy + r + 1            # bottom tangent at (cx_B, dy + 1)
-    cx_C, cy_C = dx + mx + rx - r, dy - r + 1
+    cx_C, cy_C = dx + mx + rx + right_arm_ext - r, dy - r + 1
     # Closure-derived: cx_A + r = cx_B − r, so cx_A = cx_B − 2r.
     cx_A = cx_B - 2 * r
     cy_A = bly + dy - r
@@ -325,8 +327,15 @@ def shelf_polygon(cfg, shelf_bottom):
 
     Coordinate system: corner (back-left of room) at origin (0,0).
     The shelf's relevant geometry is in 2D plan view at height = shelf_bottom.
+
+    If right_arm_extension is configured and shelf_top < height_limit, the right
+    arm is extended past the right_extra support by `length` inches.  The slot for
+    right_extra becomes a closed 3-walled slot (open only at y=0), requiring
+    dogbones at all three inner corners.  Arc C shifts rightward to match the
+    new arm end so the shelf terminates with the same curved profile.
     """
     s   = cfg['stock_thickness']
+    vs  = cfg['vertical_stock_thickness']
     R   = cfg['dogbone_radius']
     dx  = cfg['dihedral']['x_extent']      # 11.3125
     dy  = cfg['dihedral']['y_extent']      # 7.75
@@ -334,37 +343,61 @@ def shelf_polygon(cfg, shelf_bottom):
     rx  = cfg['shelf']['right_outer_x_offset']  # 9.125
     bly = cfg['shelf']['back_y_inset']     # 11.875
     mi  = cfg['shelf']['main_inset_step']  # 1.75
+    r   = cfg['shelf']['outer_arc_radius']
 
     # Extra-support widths AT THE TOP of the shelf (per user spec).
     y_top = shelf_bottom + s
     vsr = extra_support_width(cfg, y_top, 'right')
     vsl = extra_support_width(cfg, y_top, 'left')
 
-    # Vertex spec list — straight portions exactly per user description.
-    # `dogbone: True` marks the corners flagged in the spec.
-    specs = [
-        {"xy": (dx + mx + rx,             s)},                        # 1 start
-        {"xy": (dx + mx + rx - vsr,       s),       "dogbone": True}, # 2
-        {"xy": (dx + mx + rx - vsr,       0)},                        # 3
-        {"xy": (dx,                       0)},                        # 4
-        {"xy": (dx,                       mi)},                       # 5
-        {"xy": (dx + s,                   mi),      "dogbone": True}, # 6
-        {"xy": (dx + s,                   dy - mi), "dogbone": True}, # 7
-        {"xy": (dx,                       dy - mi)},                  # 8
-        {"xy": (dx,                       dy),      "dogbone": True}, # 9
-        {"xy": (dx - mi,                  dy)},                       # 10
-        {"xy": (dx - mi,                  dy + s),  "dogbone": True}, # 11
-        {"xy": (mi,                       dy + s),  "dogbone": True}, # 12
-        {"xy": (mi,                       dy)},                       # 13
-        {"xy": (0,                        dy)},                       # 14
-        {"xy": (0,                        dy + bly - vsl)},           # 15
-        {"xy": (s,                        dy + bly - vsl), "dogbone": True}, # 16
-        {"xy": (s,                        dy + bly)},                 # 17
-        # Outer 3-arc smooth front (vertex 17 → vertex 1):
-        {"arc_points": outer_curve_arcs(cfg)},
+    right_x = dx + mx + rx   # 32.0625 — unextended far-right edge
+
+    # Check whether to extend the right arm.
+    ext_cfg    = cfg.get('right_arm_extension', {})
+    ext_len    = ext_cfg.get('length', 0.0)
+    height_lim = ext_cfg.get('height_limit', 27.5)
+    do_extend  = ext_len > 0 and y_top < height_lim
+
+    # Right-arm start vertices.
+    # Non-extended: open corner notch (2 inner walls), polygon starts at arm top.
+    # Extended: closed 3-walled slot (3 dogbone corners), polygon starts at arm bottom.
+    if do_extend:
+        # Polygon starts at new arm bottom-right (y=0) and traces the slot CCW upward.
+        # B, C, D are all concave corners; A and E are convex.
+        right_specs = [
+            {"xy": (right_x + ext_len, 0)},                     # A: new arm right-bottom
+            {"xy": (right_x,           0),  "dogbone": True},   # B: slot right-bottom (concave)
+            {"xy": (right_x,           vs), "dogbone": True},   # C: slot right-top (concave)
+            {"xy": (right_x - vsr,     vs), "dogbone": True},   # D: slot left-top (concave)
+            {"xy": (right_x - vsr,     0)},                     # E: slot left-bottom (convex)
+        ]
+    else:
+        right_specs = [
+            {"xy": (right_x,           vs)},                    # V1: arm end (convex)
+            {"xy": (right_x - vsr,     vs), "dogbone": True},   # V2: slot top-left (concave)
+            {"xy": (right_x - vsr,     0)},                     # V3: slot bottom-left (convex)
+        ]
+
+    # Common body: dihedral notch, back arm, left arm (unchanged), outer arc.
+    body_specs = [
+        {"xy": (dx,                       0)},
+        {"xy": (dx,                       mi)},
+        {"xy": (dx + vs,                  mi),      "dogbone": True},
+        {"xy": (dx + vs,                  dy - mi), "dogbone": True},
+        {"xy": (dx,                       dy - mi)},
+        {"xy": (dx,                       dy),      "dogbone": True},
+        {"xy": (dx - mi,                  dy)},
+        {"xy": (dx - mi,                  dy + vs),  "dogbone": True},
+        {"xy": (mi,                       dy + vs),  "dogbone": True},
+        {"xy": (mi,                       dy)},
+        {"xy": (0,                        dy)},
+        {"xy": (0,                        dy + bly - vsl)},
+        {"xy": (vs,                       dy + bly - vsl), "dogbone": True},
+        {"xy": (vs,                       dy + bly)},   # left arm end (convex, no dogbone)
+        {"arc_points": outer_curve_arcs(cfg, right_arm_ext=ext_len if do_extend else 0.0)},
     ]
 
-    pts = expand_polygon_with_dogbones(specs, R, n_arc_pts=18)
+    pts = expand_polygon_with_dogbones(right_specs + body_specs, R, n_arc_pts=18)
     return pts
 
 
@@ -430,7 +463,8 @@ def make_layout_pdf(cfg, shelves, verticals, pdf_path):
             ax.set_xlabel("x (inches)"); ax.set_ylabel("y (inches)")
             ax.set_aspect('equal')
             ax.grid(True, alpha=0.3, linestyle='--')
-            ax.set_xlim(-3, 36)
+            x_max = max(p[0] for p in pts)
+            ax.set_xlim(-3, x_max + 4)
             ax.set_ylim(-3, 24)
 
             # Annotate the per-shelf extra-support widths
@@ -497,18 +531,25 @@ def main():
 
     bottoms = shelf_bottoms(cfg)
     s = cfg['stock_thickness']
-    z_top = bottoms[-1] + s + 1.5     # small margin above the top shelf
+    z_top = bottoms[-1] + s + 1.0     # 1" above the top shelf notch
 
     print(f"Generating {len(bottoms)} shelves at bottoms: "
           + ", ".join(f"{h:.3f}" for h in bottoms))
 
     # ── Shelves ───────────────────────────────────────────────────────────
+    ext_cfg    = cfg.get('right_arm_extension', {})
+    ext_len    = ext_cfg.get('length', 0.0)
+    height_lim = ext_cfg.get('height_limit', 27.5)
+
     shelves = []
     for idx, h in enumerate(bottoms):
+        y_top     = h + s
+        do_extend = ext_len > 0 and y_top < height_lim
         pts = shelf_polygon(cfg, h)
         shelves.append(pts)
         write_shelf_dxf(pts, out_dir / f"shelf_{idx}.dxf")
-        print(f"  shelf {idx} (bottom y={h:.3f}): {len(pts)} pts")
+        ext_note = f"  +{ext_len}\" right-arm extension" if do_extend else ""
+        print(f"  shelf {idx} (bottom={h:.3f}\" top={y_top:.3f}\"): {len(pts)} pts{ext_note}")
 
     # ── Verticals ─────────────────────────────────────────────────────────
     tabs = tab_z_ranges(cfg, bottoms)
