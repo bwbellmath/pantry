@@ -538,7 +538,7 @@ def main():
 
     bottoms = shelf_bottoms(cfg)
     s = cfg['stock_thickness']
-    z_top = bottoms[-1] + s + 1.0     # 1" above the top shelf notch
+    z_top = bottoms[-1] + s + 4.0     # 4" above the top shelf notch (3" extension added)
 
     print(f"Generating {len(bottoms)} shelves at bottoms: "
           + ", ".join(f"{h:.3f}" for h in bottoms))

@@ -44,7 +44,7 @@
   },
 
   "shelves": {
-    "first_height": 0.0,
+    "first_height": 2.0,
     "second_height_factor": 1.2,
     "subsequent_separation": 11.625,
     "count": 7,
@@ -52,8 +52,8 @@
   },
 
   "right_arm_extension": {
-    "length": 18.0,
-    "_length_note": "Extra length past the right_extra support along the right arm (inches). 18\" = 1.5 ft.",
+    "length": 0.0,
+    "_length_note": "Extra length past the right_extra support along the right arm (inches). Set to 0 to disable. Was 18\" (1.5 ft) for extended low shelves.",
     "height_limit": 27.5,
     "_height_limit_note": "Only extend shelves whose top face is strictly below this height (inches)."
   }
