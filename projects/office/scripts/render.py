@@ -72,8 +72,11 @@ def build_pieces(cfg):
     rx  = cfg['shelf']['right_outer_x_offset']  # 9.125
     bly = cfg['shelf']['back_y_inset']     # 11.875
 
-    right_x = dx + mx + rx        # 32.0625 — far-right edge of unit
-    back_y  = dy + bly            # 19.625  — far-back edge of left arm
+    ext_len = cfg.get('right_arm_extension', {}).get('length', 0.0)
+
+    right_x    = dx + mx + rx         # 32.0625 — far-right edge of unit
+    far_right_x = right_x + ext_len   # 50.0625 — end of extended shelves
+    back_y     = dy + bly             # 19.625  — far-back edge of left arm
 
     bottoms = shelf_bottoms(cfg)
     pieces  = []
@@ -147,6 +150,22 @@ def build_pieces(cfg):
         'thickness': vs,
         'material':  'walnut',
     })
+
+    # ── far_right_extra sinusoidal brace ──────────────────────────────────
+    # Flush with end of extended shelves; outside edge at x=far_right_x.
+    far_dxf = DXF_DIR / 'far_right_extra.dxf'
+    if ext_len > 0 and far_dxf.exists():
+        poly = read_dxf_polygon(far_dxf)
+        pieces.append({
+            'name':      'far_right_extra',
+            'polygon':   poly,
+            'origin':    [far_right_x, 0.0, 0.0],
+            'u_axis':    [-1.0, 0.0, 0.0],  # DXF x → -world X (grows toward center)
+            'v_axis':    [0.0, 0.0, 1.0],   # DXF y → world Z
+            'normal':    [0.0, 1.0, 0.0],   # extrude in +Y
+            'thickness': vs,
+            'material':  'walnut',
+        })
 
     return pieces
 

@@ -5,6 +5,9 @@
   "stock_thickness": 0.923,
   "_stock_thickness_note": "Measured actual stock — shelf material.",
 
+  "glue_tolerance": 0.005,
+  "_glue_tolerance_note": "Per-side clearance added to every interfacing tab/slot (total gap = 2x). Slots widen by 2*glue_tolerance; tab protrusions narrow by 2*glue_tolerance.",
+
   "vertical_stock_thickness": 0.8,
   "_vertical_stock_thickness_note": "Vertical support stock thickness (separate from shelf stock).",
 

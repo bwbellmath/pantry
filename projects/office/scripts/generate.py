@@ -84,6 +84,7 @@ def main_support_specs(cfg, bottoms, width, my_tab_z_ranges, z_top):
     s  = cfg['stock_thickness']
     vs = cfg['vertical_stock_thickness']
     inset = cfg['shelf']['main_inset_step']      # 1.75"
+    gt = cfg.get('glue_tolerance', 0.0)
     bottom_open = any(abs(h) < 1e-9 for h in bottoms)
 
     if bottom_open:
@@ -99,19 +100,19 @@ def main_support_specs(cfg, bottoms, width, my_tab_z_ranges, z_top):
         if f[0] == 'notch':
             h = f[1]
             if bottom_open and abs(h) < 1e-9:
-                specs.append({"xy": (width - inset, h + s), "dogbone": True})  # concave
-                specs.append({"xy": (width,         h + s)})                   # convex
+                specs.append({"xy": (width - inset, h + s + gt), "dogbone": True})  # concave
+                specs.append({"xy": (width,         h + s + gt)})                   # convex
             else:
-                specs.append({"xy": (width,         h    )})                   # convex
-                specs.append({"xy": (width - inset, h    ), "dogbone": True})  # concave
-                specs.append({"xy": (width - inset, h + s), "dogbone": True})  # concave
-                specs.append({"xy": (width,         h + s)})                   # convex
+                specs.append({"xy": (width,         h - gt)})                    # convex
+                specs.append({"xy": (width - inset, h - gt), "dogbone": True})   # concave
+                specs.append({"xy": (width - inset, h + s + gt), "dogbone": True})  # concave
+                specs.append({"xy": (width,         h + s + gt)})                # convex
         else:
             _, z1, z2 = f
-            specs.append({"xy": (width,      z1), "dogbone": True})        # base, concave
-            specs.append({"xy": (width + vs, z1)})                         # outer, convex
-            specs.append({"xy": (width + vs, z2)})                         # outer, convex
-            specs.append({"xy": (width,      z2), "dogbone": True})        # base, concave
+            specs.append({"xy": (width,      z1 + gt), "dogbone": True})   # base, concave
+            specs.append({"xy": (width + vs, z1 + gt)})                    # outer, convex
+            specs.append({"xy": (width + vs, z2 - gt)})                    # outer, convex
+            specs.append({"xy": (width,      z2 - gt), "dogbone": True})   # base, concave
 
     # Top edge
     specs.append({"xy": (width, z_top)})
@@ -120,14 +121,14 @@ def main_support_specs(cfg, bottoms, width, my_tab_z_ranges, z_top):
     # Left edge ↓ : shelf notches only, in reverse z order
     for h in sorted(bottoms, reverse=True):
         if bottom_open and abs(h) < 1e-9:
-            specs.append({"xy": (0,     h + s)})                           # convex
-            specs.append({"xy": (inset, h + s), "dogbone": True})          # concave
-            specs.append({"xy": (inset, h    )})                           # open-bottom notch wall
+            specs.append({"xy": (0,     h + s + gt)})                          # convex
+            specs.append({"xy": (inset, h + s + gt), "dogbone": True})         # concave
+            specs.append({"xy": (inset, h          )})                          # open-bottom notch wall
         else:
-            specs.append({"xy": (0,     h + s)})                           # convex
-            specs.append({"xy": (inset, h + s), "dogbone": True})          # concave
-            specs.append({"xy": (inset, h    ), "dogbone": True})          # concave
-            specs.append({"xy": (0,     h    )})                           # convex
+            specs.append({"xy": (0,     h + s + gt)})                          # convex
+            specs.append({"xy": (inset, h + s + gt), "dogbone": True})         # concave
+            specs.append({"xy": (inset, h - gt     ), "dogbone": True})        # concave
+            specs.append({"xy": (0,     h - gt     )})                          # convex
 
     # Dedupe consecutive specs with identical xy (happens when a shelf sits
     # exactly at a board corner — e.g. shelf 0 at z=0 produces (width, 0)
@@ -337,6 +338,7 @@ def shelf_polygon(cfg, shelf_bottom):
     s   = cfg['stock_thickness']
     vs  = cfg['vertical_stock_thickness']
     R   = cfg['dogbone_radius']
+    gt  = cfg.get('glue_tolerance', 0.0)
     dx  = cfg['dihedral']['x_extent']      # 11.3125
     dy  = cfg['dihedral']['y_extent']      # 7.75
     mx  = cfg['shelf']['main_x_inset']     # 11.625
@@ -359,41 +361,43 @@ def shelf_polygon(cfg, shelf_bottom):
     do_extend  = ext_len > 0 and y_top < height_lim
 
     # Right-arm start vertices.
-    # Non-extended: open corner notch (2 inner walls), polygon starts at arm top.
-    # Extended: closed 3-walled slot (3 dogbone corners), polygon starts at arm bottom.
+    # Non-extended: one open corner notch for right_extra support.
+    # Extended: two open corner notches — far-end support slot at arm tip, then right_extra slot.
+    # Both notches are open on the right face and wall face (y=0); same slot width vsr
+    # since far_right_extra uses the same sinusoidal profile as right_extra.
     if do_extend:
-        # Polygon starts at new arm bottom-right (y=0) and traces the slot CCW upward.
-        # B, C, D are all concave corners; A and E are convex.
         right_specs = [
-            {"xy": (right_x + ext_len, 0)},                     # A: new arm right-bottom
-            {"xy": (right_x,           0),  "dogbone": True},   # B: slot right-bottom (concave)
-            {"xy": (right_x,           vs), "dogbone": True},   # C: slot right-top (concave)
-            {"xy": (right_x - vsr,     vs), "dogbone": True},   # D: slot left-top (concave)
-            {"xy": (right_x - vsr,     0)},                     # E: slot left-bottom (convex)
+            {"xy": (right_x + ext_len,                  vs)},                   # A: new arm end-top (convex)
+            {"xy": (right_x + ext_len - vsr - 2*gt,     vs), "dogbone": True},  # B: far-end slot top-left (concave)
+            {"xy": (right_x + ext_len - vsr - 2*gt,     0)},                    # C: far-end slot bottom-left (convex)
+            {"xy": (right_x,                             0),  "dogbone": True},  # D: right_extra slot right-bottom (concave)
+            {"xy": (right_x,                             vs), "dogbone": True},  # E: right_extra slot right-top (concave)
+            {"xy": (right_x - vsr - 2*gt,               vs), "dogbone": True},  # F: right_extra slot left-top (concave)
+            {"xy": (right_x - vsr - 2*gt,               0)},                    # G: right_extra slot left-bottom (convex)
         ]
     else:
         right_specs = [
-            {"xy": (right_x,           vs)},                    # V1: arm end (convex)
-            {"xy": (right_x - vsr,     vs), "dogbone": True},   # V2: slot top-left (concave)
-            {"xy": (right_x - vsr,     0)},                     # V3: slot bottom-left (convex)
+            {"xy": (right_x,                vs)},                   # V1: arm end (convex)
+            {"xy": (right_x - vsr - 2*gt,   vs), "dogbone": True},  # V2: slot top-left (concave)
+            {"xy": (right_x - vsr - 2*gt,   0)},                    # V3: slot bottom-left (convex)
         ]
 
     # Common body: dihedral notch, back arm, left arm (unchanged), outer arc.
     body_specs = [
-        {"xy": (dx,                       0)},
-        {"xy": (dx,                       mi)},
-        {"xy": (dx + vs,                  mi),      "dogbone": True},
-        {"xy": (dx + vs,                  dy - mi), "dogbone": True},
-        {"xy": (dx,                       dy - mi)},
-        {"xy": (dx,                       dy),      "dogbone": True},
-        {"xy": (dx - mi,                  dy)},
-        {"xy": (dx - mi,                  dy + vs),  "dogbone": True},
-        {"xy": (mi,                       dy + vs),  "dogbone": True},
-        {"xy": (mi,                       dy)},
-        {"xy": (0,                        dy)},
-        {"xy": (0,                        dy + bly - vsl)},
-        {"xy": (vs,                       dy + bly - vsl), "dogbone": True},
-        {"xy": (vs,                       dy + bly)},   # left arm end (convex, no dogbone)
+        {"xy": (dx,                            0)},
+        {"xy": (dx,                            mi)},
+        {"xy": (dx + vs + 2*gt,               mi),       "dogbone": True},   # x_main slot: widen right wall
+        {"xy": (dx + vs + 2*gt,               dy - mi),  "dogbone": True},   # x_main slot: widen right wall
+        {"xy": (dx,                            dy - mi)},
+        {"xy": (dx,                            dy),       "dogbone": True},
+        {"xy": (dx - mi,                       dy)},
+        {"xy": (dx - mi,                       dy + vs + 2*gt), "dogbone": True},  # y_main slot: widen top wall
+        {"xy": (mi,                            dy + vs + 2*gt), "dogbone": True},  # y_main slot: widen top wall
+        {"xy": (mi,                            dy)},
+        {"xy": (0,                             dy)},
+        {"xy": (0,                             dy + bly - vsl - 2*gt)},                    # left_extra slot: widen
+        {"xy": (vs,                            dy + bly - vsl - 2*gt), "dogbone": True},   # left_extra slot: widen
+        {"xy": (vs,                            dy + bly)},   # left arm end (convex, no dogbone)
         {"arc_points": outer_curve_arcs(cfg, right_arm_ext=ext_len if do_extend else 0.0)},
     ]
 
@@ -423,7 +427,7 @@ def draw_dihedral_outline(ax, dx, dy):
     ax.plot([dx, dx], [0, dy], color=wall_color, lw=2)            # right face of dihedral
     ax.plot([0, dx],  [dy, dy], color=wall_color, lw=2)           # top face of dihedral
     # Extend room walls outward from the dihedral edges:
-    ax.plot([dx, 50], [0, 0],   color=wall_color, lw=1, ls='--')  # rest of bottom wall
+    ax.plot([dx, 60], [0, 0],   color=wall_color, lw=1, ls='--')  # rest of bottom wall
     ax.plot([0, 0],  [dy, 100], color=wall_color, lw=1, ls='--')  # rest of left wall
 
 
@@ -491,8 +495,11 @@ def make_layout_pdf(cfg, shelves, verticals, pdf_path):
         x_cursor = 0.0
         labels = []
         colors = {'y_main': '#5B8FB9', 'x_main': '#7E9D5C',
-                  'right_extra': '#C97064', 'left_extra': '#C97064'}
-        for name in ('y_main', 'x_main', 'right_extra', 'left_extra'):
+                  'right_extra': '#C97064', 'left_extra': '#C97064',
+                  'far_right_extra': '#C97064'}
+        names = [n for n in ('y_main', 'x_main', 'right_extra', 'left_extra', 'far_right_extra')
+                 if n in verticals]
+        for name in names:
             pts = verticals[name]
             xs = [p[0] for p in pts]
             shifted = [(p[0] + x_cursor - min(xs), p[1]) for p in pts]
@@ -555,11 +562,20 @@ def main():
     tabs = tab_z_ranges(cfg, bottoms)
     print(f"\nInterlock tabs: {len(tabs['x'])} x-main, {len(tabs['y'])} y-main")
     verticals = {
-        'y_main':     y_main_polygon(cfg, bottoms, tabs, z_top),
-        'x_main':     x_main_polygon(cfg, bottoms, tabs, z_top),
+        'y_main':      y_main_polygon(cfg, bottoms, tabs, z_top),
+        'x_main':      x_main_polygon(cfg, bottoms, tabs, z_top),
         'right_extra': extra_support_points(cfg, bottoms, 'right', z_top),
         'left_extra':  extra_support_points(cfg, bottoms, 'left',  z_top),
     }
+
+    # far_right_extra: sinusoidal support flush with the end of extended shelves,
+    # height = top of the highest extended shelf.
+    ext_bottoms = [b for b in bottoms if b + s < height_lim]
+    if ext_len > 0 and ext_bottoms:
+        far_z_top = ext_bottoms[-1] + s
+        verticals['far_right_extra'] = extra_support_points(cfg, ext_bottoms, 'right', far_z_top)
+        print(f"  far_right_extra: spans {len(ext_bottoms)} shelves, z_top={far_z_top:.3f}\"")
+
     for name, pts in verticals.items():
         write_shelf_dxf(pts, out_dir / f"{name}.dxf")
         print(f"  {name}: {len(pts)} pts")
