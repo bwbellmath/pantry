@@ -21,6 +21,122 @@ import math
 import numpy as np
 
 
+# ── Analytic arc helpers (LWPOLYLINE bulge encoding) ────────────────────────
+
+def arc_bulge_from_sweep(sweep_rad):
+    """LWPOLYLINE bulge scalar for a circular arc.
+
+    bulge = tan(included_angle / 4).
+    Positive = CCW, negative = CW.  A 180° CCW dogbone returns 1.0.
+    """
+    return math.tan(sweep_rad / 4)
+
+
+def axial_dogbone_arc_spec(prev_pt, corner, next_pt, radius):
+    """Return an arc-bulge spec dict for a 90° dogbone corner.
+
+    Same geometry as axial_dogbone_arc but instead of sampled points returns
+    {'start': (x,y), 'end': (x,y), 'bulge': ±1.0} for LWPOLYLINE bulge use.
+    Returns None if the corner is degenerate (zero-length edge).
+    """
+    cx, cy = corner
+    px, py = prev_pt
+    nx, ny = next_pt
+
+    bl = math.hypot(px - cx, py - cy)
+    fl = math.hypot(nx - cx, ny - cy)
+    if bl < 1e-12 or fl < 1e-12:
+        return None
+
+    back_x, back_y = (px - cx) / bl, (py - cy) / bl
+    fwd_x,  fwd_y  = (nx - cx) / fl, (ny - cy) / fl
+
+    sqrt2 = math.sqrt(2)
+    R = radius
+    cxc = cx + (R / sqrt2) * (back_x + fwd_x)
+    cyc = cy + (R / sqrt2) * (back_y + fwd_y)
+
+    t1x = cx + R * sqrt2 * back_x
+    t1y = cy + R * sqrt2 * back_y
+    t2x = cx + R * sqrt2 * fwd_x
+    t2y = cy + R * sqrt2 * fwd_y
+
+    a1      = math.atan2(t1y - cyc, t1x - cxc)
+    a2      = math.atan2(t2y - cyc, t2x - cxc)
+    a_corner = math.atan2(cy  - cyc, cx  - cxc)
+
+    a2_ccw = a2 + 2 * math.pi if a2 < a1 else a2
+    ac_ccw = a_corner
+    while ac_ccw < a1:
+        ac_ccw += 2 * math.pi
+
+    # A 180° dogbone bulge is exactly ±1.0; no need to compute the full sweep.
+    bulge = 1.0 if ac_ccw <= a2_ccw + 1e-9 else -1.0
+    return {'start': (t1x, t1y), 'end': (t2x, t2y), 'bulge': bulge}
+
+
+def expand_polygon_analytic(specs, radius, collinear_tol=1e-6):
+    """Analytic counterpart to expand_polygon_with_dogbones.
+
+    Returns a list of 5-tuples (x, y, start_width, end_width, bulge) suitable
+    for ezdxf add_lwpolyline.  Dogbone corners become two vertices with a
+    non-zero bulge (±1.0) that encodes the 180° arc exactly — no sampling.
+
+    Accepts the same spec keys as expand_polygon_with_dogbones:
+      {"xy": (x, y)}
+      {"xy": (x, y), "dogbone": True}
+      {"arc_segments": [{"start":(x,y), "end":(x,y), "bulge": float}, ...]}
+      {"arc_points": [...]}  ← fallback: sampled as bulge-0 vertices
+    """
+    n = len(specs)
+    out = []
+
+    def _nbr(j):
+        spec = specs[j % n]
+        if "xy" in spec:
+            return tuple(spec["xy"])
+        if "arc_segments" in spec:
+            segs = spec["arc_segments"]
+            return tuple(segs[-1]['end'] if (j % n) > (j % n - 1) else segs[0]['start'])
+        if "arc_points" in spec:
+            pts = spec["arc_points"]
+            return tuple(pts[-1] if (j % n) < ((j + 1) % n) else pts[0])
+        return (0.0, 0.0)
+
+    for i, spec in enumerate(specs):
+        if "arc_segments" in spec:
+            segs = spec["arc_segments"]
+            for seg in segs:
+                out.append((*seg['start'], 0, 0, seg['bulge']))
+            if segs:
+                out.append((*segs[-1]['end'], 0, 0, 0))
+        elif "arc_points" in spec:
+            for pt in spec["arc_points"]:
+                out.append((*pt, 0, 0, 0))
+        elif spec.get("dogbone"):
+            prev_xy = _nbr(i - 1)
+            next_xy = _nbr(i + 1)
+            corner  = tuple(spec["xy"])
+            in_dx = corner[0] - prev_xy[0]; in_dy = corner[1] - prev_xy[1]
+            out_dx = next_xy[0] - corner[0]; out_dy = next_xy[1] - corner[1]
+            cross = in_dx * out_dy - in_dy * out_dx
+            if abs(cross) < collinear_tol:
+                out.append((*corner, 0, 0, 0))
+            else:
+                arc = axial_dogbone_arc_spec(prev_xy, corner, next_xy, radius)
+                if arc is None:
+                    out.append((*corner, 0, 0, 0))
+                else:
+                    out.append((*arc['start'], 0, 0, arc['bulge']))
+                    out.append((*arc['end'],   0, 0, 0))
+        else:
+            out.append((*spec["xy"], 0, 0, 0))
+
+    return out
+
+
+# ── Legacy sampled-arc helpers (unchanged) ───────────────────────────────────
+
 def axial_dogbone_arc(prev_pt, corner, next_pt, radius, n_arc_pts=24):
     """Replace `corner` with a 180° dogbone arc.
 

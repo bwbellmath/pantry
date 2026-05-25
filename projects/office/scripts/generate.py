@@ -31,7 +31,10 @@ from matplotlib.lines import Line2D
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / 'lib'))
-from dogbone import expand_polygon_with_dogbones, insert_proper_dogbone
+from dogbone import (expand_polygon_with_dogbones, insert_proper_dogbone,
+                     expand_polygon_analytic, arc_bulge_from_sweep,
+                     axial_dogbone_arc_spec)
+from dxf_writer import write_contour_legacy, write_contour_analytic, new_dxf_doc
 
 
 def axis_aligned_arc(center, radius, start_angle_deg, sweep_deg, n=24):
@@ -42,6 +45,45 @@ def axis_aligned_arc(center, radius, start_angle_deg, sweep_deg, n=24):
     a1 = math.radians(start_angle_deg + sweep_deg)
     return [(cx + radius * math.cos(a), cy + radius * math.sin(a))
             for a in np.linspace(a0, a1, n + 1)]
+
+
+def axis_aligned_arc_spec(center, radius, start_angle_deg, sweep_deg):
+    """Analytic arc spec (LWPOLYLINE bulge) for a circular arc.
+
+    Returns {'start': (x,y), 'end': (x,y), 'bulge': float} where
+    bulge = tan(sweep_rad/4).  Positive = CCW, negative = CW.
+    """
+    cx, cy = center
+    a0 = math.radians(start_angle_deg)
+    a1 = math.radians(start_angle_deg + sweep_deg)
+    return {
+        'start': (cx + radius * math.cos(a0), cy + radius * math.sin(a0)),
+        'end':   (cx + radius * math.cos(a1), cy + radius * math.sin(a1)),
+        'bulge': arc_bulge_from_sweep(math.radians(sweep_deg)),
+    }
+
+
+def outer_curve_arcs_analytic(cfg, right_arm_ext=0.0):
+    """Analytic version of outer_curve_arcs: returns list of arc specs instead
+    of sampled points.  Same three-arc S-curve topology as outer_curve_arcs."""
+    s   = cfg['stock_thickness']
+    dx  = cfg['dihedral']['x_extent']
+    dy  = cfg['dihedral']['y_extent']
+    mx  = cfg['shelf']['main_x_inset']
+    rx  = cfg['shelf']['right_outer_x_offset']
+    bly = cfg['shelf']['back_y_inset']
+    r   = cfg['shelf']['outer_arc_radius']
+
+    cx_B, cy_B = dx + r + 1, dy + r + 1
+    cx_C, cy_C = dx + mx + rx + right_arm_ext - r, dy - r + 1
+    cx_A = cx_B - 2 * r
+    cy_A = bly + dy - r
+
+    return [
+        axis_aligned_arc_spec((cx_A, cy_A), r, 90,  -90),   # Arc A: CW 90°
+        axis_aligned_arc_spec((cx_B, cy_B), r, 180,  90),   # Arc B: CCW 90°
+        axis_aligned_arc_spec((cx_C, cy_C), r, 90,  -90),   # Arc C: CW 90°
+    ]
 
 
 def tab_z_ranges(cfg, bottoms):
@@ -400,20 +442,26 @@ def shelf_polygon(cfg, shelf_bottom):
         {"xy": (vs,                            dy + bly)},   # left arm end (convex, no dogbone)
         {"arc_points": outer_curve_arcs(cfg, right_arm_ext=ext_len if do_extend else 0.0)},
     ]
+    # Analytic body_specs share all coordinates; only the arc entry differs.
+    body_specs_analytic = body_specs[:-1] + [
+        {"arc_segments": outer_curve_arcs_analytic(cfg, right_arm_ext=ext_len if do_extend else 0.0)},
+    ]
 
-    pts = expand_polygon_with_dogbones(right_specs + body_specs, R, n_arc_pts=18)
-    return pts
+    analytic = cfg.get('analytic_dxf', False)
+    if analytic:
+        return expand_polygon_analytic(right_specs + body_specs_analytic, R)
+    return expand_polygon_with_dogbones(right_specs + body_specs, R, n_arc_pts=18)
 
 
 # ── DXF output ──────────────────────────────────────────────────────────────
 
-def write_shelf_dxf(pts, path):
-    doc = ezdxf.new(dxfversion='R2010')
-    doc.units = units.IN
+def write_shelf_dxf(pts, path, analytic=False):
+    doc = new_dxf_doc()
     msp = doc.modelspace()
-    closed_pts = list(pts) + [pts[0]]
-    msp.add_lwpolyline([(x, y, 0) for x, y in closed_pts], close=True,
-                       dxfattribs={'layer': 'SHELF'})
+    if analytic:
+        write_contour_analytic(msp, pts, layer='SHELF')
+    else:
+        write_contour_legacy(msp, pts, layer='SHELF')
     doc.saveas(path)
 
 
@@ -434,13 +482,22 @@ def draw_dihedral_outline(ax, dx, dy):
 def y_main_polygon(cfg, bottoms, tabs, z_top):
     width = cfg['dihedral']['y_extent']
     specs = main_support_specs(cfg, bottoms, width, tabs['y'], z_top)
+    if cfg.get('analytic_dxf'):
+        return expand_polygon_analytic(specs, cfg['dogbone_radius'])
     return expand_polygon_with_dogbones(specs, cfg['dogbone_radius'], n_arc_pts=14)
 
 
 def x_main_polygon(cfg, bottoms, tabs, z_top):
     width = cfg['dihedral']['x_extent']
     specs = main_support_specs(cfg, bottoms, width, tabs['x'], z_top)
+    if cfg.get('analytic_dxf'):
+        return expand_polygon_analytic(specs, cfg['dogbone_radius'])
     return expand_polygon_with_dogbones(specs, cfg['dogbone_radius'], n_arc_pts=14)
+
+
+def _xy(pts):
+    """Strip vertices to (x, y) pairs for matplotlib (handles both 2- and 5-tuples)."""
+    return [(p[0], p[1]) for p in pts]
 
 
 def make_layout_pdf(cfg, shelves, verticals, pdf_path):
@@ -453,13 +510,14 @@ def make_layout_pdf(cfg, shelves, verticals, pdf_path):
     with PdfPages(pdf_path) as pdf:
         # One page per shelf at its level
         for idx, (h, pts) in enumerate(zip(bottoms, shelves)):
+            xy = _xy(pts)
             fig, ax = plt.subplots(figsize=(11, 8.5))
             draw_dihedral_outline(ax, dx, dy)
-            poly = mpatches.Polygon(pts, closed=True, facecolor=shelf_color,
+            poly = mpatches.Polygon(xy, closed=True, facecolor=shelf_color,
                                     edgecolor='black', linewidth=1.0, alpha=0.55)
             ax.add_patch(poly)
             # Mark the start vertex
-            ax.plot(pts[0][0], pts[0][1], marker='o', color='black', markersize=4)
+            ax.plot(xy[0][0], xy[0][1], marker='o', color='black', markersize=4)
 
             ax.set_title(f"Shelf {idx} — bottom at y(height)={h:.3f}\"  "
                          f"(top={h + cfg['stock_thickness']:.3f}\")",
@@ -467,7 +525,7 @@ def make_layout_pdf(cfg, shelves, verticals, pdf_path):
             ax.set_xlabel("x (inches)"); ax.set_ylabel("y (inches)")
             ax.set_aspect('equal')
             ax.grid(True, alpha=0.3, linestyle='--')
-            x_max = max(p[0] for p in pts)
+            x_max = max(p[0] for p in xy)
             ax.set_xlim(-3, x_max + 4)
             ax.set_ylim(-3, 24)
 
@@ -500,7 +558,7 @@ def make_layout_pdf(cfg, shelves, verticals, pdf_path):
         names = [n for n in ('y_main', 'x_main', 'right_extra', 'left_extra', 'far_right_extra')
                  if n in verticals]
         for name in names:
-            pts = verticals[name]
+            pts = _xy(verticals[name])
             xs = [p[0] for p in pts]
             shifted = [(p[0] + x_cursor - min(xs), p[1]) for p in pts]
             poly = mpatches.Polygon(shifted, closed=True,
@@ -525,7 +583,7 @@ def make_layout_pdf(cfg, shelves, verticals, pdf_path):
         ax.set_aspect('equal')
         ax.grid(True, alpha=0.2, linestyle='--')
         ax.set_xlim(-4, x_cursor + 2)
-        ax.set_ylim(-6, max(p[1] for p in verticals['y_main']) + 4)
+        ax.set_ylim(-6, max(p[1] for p in _xy(verticals['y_main'])) + 4)
         pdf.savefig(fig, dpi=150); plt.close(fig)
 
 
@@ -548,13 +606,17 @@ def main():
     ext_len    = ext_cfg.get('length', 0.0)
     height_lim = ext_cfg.get('height_limit', 27.5)
 
+    analytic = cfg.get('analytic_dxf', False)
+    if analytic:
+        print("  [analytic_dxf=true: writing LWPOLYLINE with bulge-encoded arcs]")
+
     shelves = []
     for idx, h in enumerate(bottoms):
         y_top     = h + s
         do_extend = ext_len > 0 and y_top < height_lim
         pts = shelf_polygon(cfg, h)
         shelves.append(pts)
-        write_shelf_dxf(pts, out_dir / f"shelf_{idx}.dxf")
+        write_shelf_dxf(pts, out_dir / f"shelf_{idx}.dxf", analytic=analytic)
         ext_note = f"  +{ext_len}\" right-arm extension" if do_extend else ""
         print(f"  shelf {idx} (bottom={h:.3f}\" top={y_top:.3f}\"): {len(pts)} pts{ext_note}")
 
@@ -564,6 +626,7 @@ def main():
     verticals = {
         'y_main':      y_main_polygon(cfg, bottoms, tabs, z_top),
         'x_main':      x_main_polygon(cfg, bottoms, tabs, z_top),
+        # Extra supports: still legacy path (sinusoidal sections, spline upgrade pending)
         'right_extra': extra_support_points(cfg, bottoms, 'right', z_top),
         'left_extra':  extra_support_points(cfg, bottoms, 'left',  z_top),
     }
@@ -577,7 +640,9 @@ def main():
         print(f"  far_right_extra: spans {len(ext_bottoms)} shelves, z_top={far_z_top:.3f}\"")
 
     for name, pts in verticals.items():
-        write_shelf_dxf(pts, out_dir / f"{name}.dxf")
+        # Extra supports always use legacy path (flat point lists from extra_support_points)
+        use_analytic = analytic and name not in ('right_extra', 'left_extra', 'far_right_extra')
+        write_shelf_dxf(pts, out_dir / f"{name}.dxf", analytic=use_analytic)
         print(f"  {name}: {len(pts)} pts")
 
     pdf_path = out_dir / "office_layout.pdf"
