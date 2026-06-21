@@ -8,7 +8,7 @@
   "glue_tolerance": 0.005,
   "_glue_tolerance_note": "Per-side clearance added to every interfacing tab/slot (total gap = 2x). Slots widen by 2*glue_tolerance; tab protrusions narrow by 2*glue_tolerance.",
 
-  "analytic_dxf": true,
+  "analytic_dxf": false,
   "_analytic_dxf_note": "Use exact LWPOLYLINE bulge-encoded arcs instead of polyline approximations. Set false to revert to legacy sampled-arc output.",
 
   "vertical_stock_thickness": 0.8,

@@ -26,7 +26,9 @@ $(PROJECTS):
 		$(PYTHON) tools/export_shelf_geometry.py --project $@; \
 	else echo "    (skipped — no stud_positions.json)"; fi
 	@echo "==> [$@] 5/5  CNC contour + pocket DXFs"
-	@if [ -f projects/$@/nesting_layout.json ] && [ -f projects/$@/configs/stud_positions.json ]; then \
+	@if [ -f projects/$@/scripts/process_for_cnc.py ]; then \
+		$(PYTHON) projects/$@/scripts/process_for_cnc.py; \
+	elif [ -f projects/$@/nesting_layout.json ] && [ -f projects/$@/configs/stud_positions.json ]; then \
 		$(PYTHON) tools/process_for_cnc.py --project $@; \
 	else echo "    (skipped — no nesting_layout.json / stud_positions.json)"; fi
 	@echo "==> [$@] done"
